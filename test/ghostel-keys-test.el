@@ -357,6 +357,46 @@ SETUP, when non-nil, is called before sending the paste."
        (lambda (hex) (= (length hex) (* 2 byte-count)))
        proc 5))))
 
+(defun ghostel-test--capture-paste-outcome (thunk)
+  "Call THUNK and return its value, error, or quit as tagged data."
+  (condition-case condition
+      (list :return (funcall thunk))
+    (quit (list :quit condition))
+    (error (list :error condition))))
+
+(defun ghostel-test--condition-inherits-p (condition parent)
+  "Return non-nil when CONDITION inherits error condition PARENT."
+  (memq parent (get (car condition) 'error-conditions)))
+
+(defun ghostel-test--tree-contains-string-p (tree needle)
+  "Return non-nil when a string in TREE contains NEEDLE."
+  (cond
+   ((stringp tree)
+    (and (<= (length needle) (length tree))
+         (string-search needle tree)))
+   ((consp tree)
+    (or (ghostel-test--tree-contains-string-p (car tree) needle)
+        (ghostel-test--tree-contains-string-p (cdr tree) needle)))))
+
+(defconst ghostel-test--strict-paste-prefix-recorder-script
+  (string-join
+   '("import os, sys, tty"
+     "fd = sys.stdin.fileno()"
+     "if os.isatty(fd):"
+     "    tty.setraw(fd)"
+     "sys.stdout.buffer.write(b'GHOSTEL_PREFIX_READY\\r\\n')"
+     "sys.stdout.buffer.flush()"
+     "prefix = b''"
+     "while len(prefix) < 6:"
+     "    chunk = os.read(fd, 6 - len(prefix))"
+     "    if not chunk:"
+     "        break"
+     "    prefix += chunk"
+     "sys.stdout.buffer.write(b'\\r\\nGHOSTEL_PREFIX_HEX:' + prefix.hex().encode('ascii') + b'\\r\\n')"
+     "sys.stdout.buffer.flush()")
+   "\n")
+  "Python code that confirms one paste prefix and then closes its PTY.")
+
 (ert-deftest ghostel-test-encode-paste-bracketed ()
   "Bracketed-paste mode wraps pasted data via libghostty's paste encoder."
   :tags '(native posix)
@@ -366,6 +406,156 @@ SETUP, when non-nil, is called before sending the paste."
                      (ghostel-test--paste-and-read-hex
                       "hello" 17
                       (lambda () (ghostel--write-vt ghostel--term "\e[?2004h"))))))))
+
+(ert-deftest ghostel-test-strict-paste-refuses-before-writing ()
+  "Strict paste without DEC 2004 writes nothing before its refusal."
+  :tags '(native posix)
+  (ghostel-test--with-pty-matrix backend
+    (let ((python (executable-find "python3"))
+          (payload "sensitive\npayload"))
+      (unless python (ert-skip "python3 not available"))
+      (ghostel-test--with-exec-buffer
+          (buf proc python
+               (list "-c" ghostel-test--pty-byte-recorder-script "1"))
+        (ghostel-test--wait-for-text "GHOSTEL_RECORDER_READY" proc 5)
+        (ghostel--write-vt ghostel--term "\e[?2004l")
+        (let ((refusal
+               (condition-case err
+                   (ghostel-paste-string payload t)
+                 (ghostel-bracketed-paste-unavailable err))))
+          (should refusal)
+          (cl-labels ((contains-payload-p (value)
+                        (cond
+                         ((stringp value)
+                          (string-match-p (regexp-quote payload) value))
+                         ((consp value)
+                          (or (contains-payload-p (car value))
+                              (contains-payload-p (cdr value)))))))
+            (should-not (contains-payload-p refusal))))
+        (ghostel-send-string "!")
+        (should
+         (equal "21"
+                (ghostel-test--wait-for-marker-payload
+                 "GHOSTEL_INPUT_HEX:"
+                 (lambda (hex) (= (length hex) 2))
+                 proc 5)))))))
+
+(ert-deftest ghostel-test-strict-paste-samples-dec-2004-per-call ()
+  "Strict paste samples DEC 2004 immediately before every call."
+  :tags '(native posix)
+  (ghostel-test--with-pty-matrix backend
+    (let* ((python (executable-find "python3"))
+           (payload "hello\nworld")
+           (wire (concat "\e[200~" payload "\e[201~"))
+           (expected (ghostel-test--hex-encode-string (concat wire "!"))))
+      (unless python (ert-skip "python3 not available"))
+      (ghostel-test--with-exec-buffer
+          (buf proc python
+               (list "-c" ghostel-test--pty-byte-recorder-script
+                     (number-to-string (string-bytes (concat wire "!")))))
+        (ghostel-test--wait-for-text "GHOSTEL_RECORDER_READY" proc 5)
+        (ghostel--write-vt ghostel--term "\e[?2004h")
+        (should (eq t (ghostel-paste-string payload t)))
+        (ghostel--write-vt ghostel--term "\e[?2004l")
+        (should-error (ghostel-paste-string "must-not-be-written" t)
+                      :type 'ghostel-bracketed-paste-unavailable)
+        (ghostel-send-string "!")
+        (should
+         (equal expected
+                (ghostel-test--wait-for-marker-payload
+                 "GHOSTEL_INPUT_HEX:"
+                 (lambda (hex) (= (length hex) (length expected)))
+                 proc 5)))))))
+
+(ert-deftest ghostel-test-strict-paste-missing-transport-is-not-written ()
+  "Strict paste reports a bounded zero-write receipt without a transport."
+  :tags '(native)
+  (ghostel-test--with-terminal-buffer (buf term 24 80 1000)
+    (let ((payload "sensitive\npayload"))
+      (setq-local ghostel--process nil)
+      (ghostel--write-vt term "\e[?2004h")
+      (let ((outcome
+             (ghostel-test--capture-paste-outcome
+              (lambda () (ghostel-paste-string payload t)))))
+        (should (equal outcome '(:error (ghostel-paste-not-written))))
+        (should-not (ghostel-test--tree-contains-string-p outcome payload))))))
+
+(ert-deftest ghostel-test-strict-paste-emacs-transport-error-is-indeterminate ()
+  "An Emacs-managed transport error remains observable after entry."
+  :tags '(native)
+  (ghostel-test--with-terminal-buffer (buf term 24 80 1000)
+    (let* ((payload "sensitive\npayload")
+           (proc (ghostel-test--dummy-process "strict-paste-error" buf))
+           sent
+           outcome)
+      (setq-local ghostel--process proc)
+      (ghostel--write-vt term "\e[?2004h")
+      (cl-letf (((symbol-function 'process-send-string)
+                 (lambda (process string)
+                   (setq sent (list process string))
+                   (signal 'file-error '("Forced transport failure")))))
+        (setq outcome
+              (ghostel-test--capture-paste-outcome
+               (lambda () (ghostel-paste-string payload t)))))
+      (should (equal sent (list proc "\e[200~")))
+      (should (equal outcome
+                     '(:error (file-error "Forced transport failure"))))
+      (should-not
+       (ghostel-test--condition-inherits-p
+        (cadr outcome) 'ghostel-paste-not-written))
+      (should-not (ghostel-test--tree-contains-string-p outcome payload)))))
+
+(ert-deftest ghostel-test-strict-paste-emacs-transport-quit-is-indeterminate ()
+  "An Emacs-managed transport quit remains observable after entry."
+  :tags '(native)
+  (ghostel-test--with-terminal-buffer (buf term 24 80 1000)
+    (let* ((payload "sensitive\npayload")
+           (proc (ghostel-test--dummy-process "strict-paste-quit" buf))
+           sent
+           outcome)
+      (setq-local ghostel--process proc)
+      (ghostel--write-vt term "\e[?2004h")
+      (cl-letf (((symbol-function 'process-send-string)
+                 (lambda (process string)
+                   (setq sent (list process string))
+                   (signal 'quit '("Forced transport quit")))))
+        (setq outcome
+              (ghostel-test--capture-paste-outcome
+               (lambda () (ghostel-paste-string payload t)))))
+      (should (equal sent (list proc "\e[200~")))
+      (should (equal outcome '(:quit (quit "Forced transport quit"))))
+      (should-not
+       (ghostel-test--condition-inherits-p
+        (cadr outcome) 'ghostel-paste-not-written))
+      (should-not (ghostel-test--tree-contains-string-p outcome payload)))))
+
+(ert-deftest ghostel-test-strict-paste-native-prefix-interruption-is-indeterminate ()
+  "A confirmed native prefix followed by interruption is not retry-safe."
+  :tags '(native posix)
+  (let ((ghostel-use-native-pty t)
+        (python (executable-find "python3"))
+        (payload (make-string (* 1024 1024) ?x)))
+    (unless python (ert-skip "python3 not available"))
+    (ghostel-test--with-exec-buffer
+        (buf proc python
+             (list "-u" "-c"
+                   ghostel-test--strict-paste-prefix-recorder-script))
+      (ghostel-test--wait-for-text "GHOSTEL_PREFIX_READY" proc 5)
+      (ghostel--write-vt ghostel--term "\e[?2004h")
+      (let ((outcome
+             (ghostel-test--capture-paste-outcome
+              (lambda () (ghostel-paste-string payload t)))))
+        (should (eq (car outcome) :error))
+        (should-not
+         (ghostel-test--condition-inherits-p
+          (cadr outcome) 'ghostel-paste-not-written))
+        (should-not (ghostel-test--tree-contains-string-p outcome payload))
+        (should
+         (equal "1b5b3230307e"
+                (ghostel-test--wait-for-marker-payload
+                 "GHOSTEL_PREFIX_HEX:"
+                 (lambda (hex) (= (length hex) 12))
+                 proc 5)))))))
 
 (ert-deftest ghostel-test-encode-paste-unbracketed-newline ()
   "Without bracketed-paste mode, libghostty normalizes paste newlines to CR."
@@ -975,9 +1165,50 @@ External packages may still call the old internal name."
     (ghostel-mode)
     (let (received)
       (cl-letf (((symbol-function 'ghostel--paste-text)
-                 (lambda (str) (setq received str))))
+                 (lambda (str &optional _require-bracketed)
+                   (setq received str))))
         (ghostel-paste-string "hello world")
         (should (equal received "hello world"))))))
+
+(ert-deftest ghostel-test-paste-string-forwards-required-bracketed-policy ()
+  "`ghostel-paste-string' forwards its strict bracketed-paste policy."
+  (with-temp-buffer
+    (ghostel-mode)
+    (let (received)
+      (cl-letf (((symbol-function 'ghostel--paste-text)
+                 (lambda (string &optional require-bracketed)
+                   (setq received (list string require-bracketed))
+                   t)))
+        (should (eq t (ghostel-paste-string "payload" t)))
+        (should (equal received '("payload" t)))))))
+
+(ert-deftest ghostel-test-bracketed-paste-unavailable-is-not-written ()
+  "Strict mode refusal is a definite-zero-write paste condition."
+  (should (memq 'ghostel-paste-not-written
+                (get 'ghostel-bracketed-paste-unavailable
+                     'error-conditions))))
+
+(ert-deftest ghostel-test-paste-string-propagates-transport-errors ()
+  "A transport error without a zero-write receipt remains observable."
+  (with-temp-buffer
+    (ghostel-mode)
+    (cl-letf (((symbol-function 'ghostel--paste-text)
+               (lambda (&rest _)
+                 (signal 'file-error '("transport failed")))))
+      (should-error (ghostel-paste-string "payload" t)
+                    :type 'file-error))))
+
+(ert-deftest ghostel-test-paste-string-propagates-quit ()
+  "A quit raised after paste transport begins remains observable."
+  (with-temp-buffer
+    (ghostel-mode)
+    (cl-letf (((symbol-function 'ghostel--paste-text)
+               (lambda (&rest _) (signal 'quit nil))))
+      (should
+       (eq 'quit
+           (condition-case nil
+               (ghostel-paste-string "payload" t)
+             (quit 'quit)))))))
 
 (ert-deftest ghostel-test-paste-string-errors-outside-ghostel-buffer ()
   "`ghostel-paste-string' signals `user-error' when not in a ghostel buffer."

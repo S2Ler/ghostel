@@ -113,10 +113,17 @@ pub fn vtWrite(self: *Self, data: []const u8) !void {
     self.unlockTerm();
 }
 
+const PtyWriteReceipt = enum {
+    complete,
+    transport_missing,
+    interrupted,
+    emacs_exit,
+};
+
 pub fn ptyWrite(self: *Self, data: []const u8) !void {
     const env = emacs.current_env orelse return error.MissingEmacsEnv;
     if (self.process) |proc| {
-        try proc.ptyWrite(env, data);
+        _ = try proc.ptyWrite(env, data);
     } else {
         _ = env.funcall(
             @field(emacs.sym, "process-send-string"),
@@ -130,8 +137,33 @@ pub fn ptyWrite(self: *Self, data: []const u8) !void {
     }
 }
 
+fn ptyWriteReceipt(self: *Self, data: []const u8) !PtyWriteReceipt {
+    const env = emacs.current_env orelse return error.MissingEmacsEnv;
+    if (self.process) |proc| {
+        return switch (try proc.ptyWrite(env, data)) {
+            .complete => .complete,
+            .backend_missing => .transport_missing,
+            .interrupted => .interrupted,
+        };
+    }
+
+    const process = env.symbolValue("ghostel--process");
+    if (env.isNil(process)) return .transport_missing;
+    const live = env.funcall(env.intern("process-live-p"), &env.makeValues(.{process}));
+    if (env.nonLocalExitCheck() != .normal) return .emacs_exit;
+    if (env.isNil(live)) return .transport_missing;
+
+    _ = env.funcall(
+        @field(emacs.sym, "process-send-string"),
+        &env.makeValues(.{ process, data }),
+    );
+    return if (env.nonLocalExitCheck() == .normal) .complete else .emacs_exit;
+}
+
 pub fn ptyWriteFromTerminal(self: *Self, data: []const u8) void {
-    self.ptyWrite(data) catch {};
+    self.ptyWrite(data) catch |err| {
+        std.log.err("ghostel: Failed to write terminal response to PTY: {any}", .{err});
+    };
 }
 
 pub fn effect(_: *Self, comptime func: []const u8, args: anytype) void {
@@ -209,19 +241,44 @@ pub fn encodeFocus(self: *Self, gained: bool) !bool {
     return true;
 }
 
-pub fn encodePaste(self: *Self, data: []u8) !bool {
-    const slices = gt.input.encodePaste(
-        data,
-        gt.input.PasteOptions.fromTerminal(&self.terminal),
-    );
+pub const PasteOutcome = enum {
+    complete,
+    no_output,
+    bracketed_unavailable,
+    transport_missing,
+    emacs_exit,
+};
+
+pub fn encodePaste(self: *Self, data: []u8, require_bracketed: bool) !PasteOutcome {
+    try self.lockTerm();
+    const options = gt.input.PasteOptions.fromTerminal(&self.terminal);
+    if (require_bracketed and !options.bracketed) {
+        self.unlockTerm();
+        return .bracketed_unavailable;
+    }
+    const slices = gt.input.encodePaste(data, options);
+    self.unlockTerm();
 
     var wrote = false;
     for (slices) |slice| {
         if (slice.len == 0) continue;
-        try self.ptyWrite(slice);
-        wrote = true;
+        if (!require_bracketed) {
+            try self.ptyWrite(slice);
+            wrote = true;
+            continue;
+        }
+        switch (try self.ptyWriteReceipt(slice)) {
+            .complete => wrote = true,
+            .transport_missing => if (wrote)
+                return error.PasteTransportInterrupted
+            else
+                return .transport_missing,
+            .interrupted => return error.PasteTransportInterrupted,
+            // The original Emacs signal, throw, or quit remains pending on ENV.
+            .emacs_exit => return .emacs_exit,
+        }
     }
-    return wrote;
+    return if (wrote) .complete else .no_output;
 }
 
 /// Resize the terminal. The col/row size gets committed on next redraw in order
@@ -597,18 +654,30 @@ pub const emacs_functions = [_]emacs.FunctionEntry{
     },
     .{
         .name = "ghostel--encode-paste",
-        .arity = .{ 2, 2 },
+        .arity = .{ 2, 3 },
         .doc =
         \\Encode paste text using the terminal's paste encoder and write it to the PTY.
         \\
-        \\(ghostel--encode-paste TERM DATA)
+        \\(ghostel--encode-paste TERM DATA &optional REQUIRE-BRACKETED)
         ,
         .impl = struct {
-            pub fn call(env: emacs.Env, _: isize, args: [*c]emacs.Value) !emacs.Value {
-                if (env.isNil(args[0])) return env.nil();
+            pub fn call(env: emacs.Env, nargs: isize, args: [*c]emacs.Value) !emacs.Value {
+                const require_bracketed = nargs > 2 and env.isNotNil(args[2]);
+                if (env.isNil(args[0])) return if (require_bracketed)
+                    env.intern("ghostel--paste-transport-missing")
+                else
+                    env.nil();
                 const term = env.getUserPtr(Self, args[0]) orelse return error.InvalidTerminalHandle;
                 const data = try env.extractStringAlloc(module_alloc, args[1], &term.string_buffer);
-                return if (try term.encodePaste(data)) env.t() else env.nil();
+                return switch (try term.encodePaste(data, require_bracketed)) {
+                    .complete => env.t(),
+                    .no_output => env.nil(),
+                    .bracketed_unavailable => env.intern("ghostel--paste-bracketed-unavailable"),
+                    .transport_missing => env.intern("ghostel--paste-transport-missing"),
+                    // Returning while the original nonlocal exit is pending
+                    // preserves that exact signal, throw, or quit for Elisp.
+                    .emacs_exit => env.nil(),
+                };
             }
         },
     },

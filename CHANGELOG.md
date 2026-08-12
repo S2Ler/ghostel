@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- `ghostel-paste-string` now accepts an optional strict bracketed-paste
+  policy.  Strict calls refuse with a `ghostel-paste-not-written`
+  condition when mode 2004 or a local transport is definitely absent,
+  and return t only after the complete encoded paste is locally
+  accepted; errors or interruption after transport begins remain
+  observable and indeterminate rather than being safe to retry.
 - Terminal buffers keep a stable name; the terminal title moves to the
   mode line.  `ghostel-buffer-name-function` now defaults to nil, so
   OSC 2 titles and OSC 7 `cd`s no longer rename the buffer — names like

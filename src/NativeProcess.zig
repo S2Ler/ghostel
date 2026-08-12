@@ -98,7 +98,13 @@ pub fn unlockTerm(self: *Self) void {
     self.term_mutex.unlock(self.io);
 }
 
-pub fn ptyWrite(self: *Self, env: emacs.Env, data: []const u8) !void {
+pub const WriteOutcome = enum {
+    complete,
+    backend_missing,
+    interrupted,
+};
+
+pub fn ptyWrite(self: *Self, env: emacs.Env, data: []const u8) !WriteOutcome {
     while (!self.write_mutex.tryLock()) {
         try env.checkQuit();
         try std.Io.sleep(self.io, cancellation_poll_interval, std.Io.Clock.awake);
@@ -119,9 +125,11 @@ pub fn ptyWrite(self: *Self, env: emacs.Env, data: []const u8) !void {
                 offset += n;
                 try env.checkQuit();
             },
-            .interrupted => return,
+            .backend_missing => return if (offset == 0) .backend_missing else .interrupted,
+            .interrupted => return .interrupted,
         }
     }
+    return .complete;
 }
 
 pub fn ptyWriteFromTerminal(self: *Self, data: []const u8) void {
@@ -147,18 +155,27 @@ pub fn ptyWriteFromTerminal(self: *Self, data: []const u8) void {
     }
 }
 
+const BackendWriteOutcome = union(enum) {
+    written: usize,
+    interrupted,
+    backend_missing,
+};
+
 fn ptyWriteBackend(
     self: *Self,
     data: []const u8,
     cancellation: ?backend_types.CancellationToken,
-) !backend_types.WriteResult {
+) !BackendWriteOutcome {
     try self.backend_handoff_mutex.lock(self.io);
     defer self.backend_handoff_mutex.unlock(self.io);
 
-    return if (self.backend) |*backend|
-        backend.write(data, cancellation)
-    else
-        .interrupted;
+    if (self.backend) |*backend| {
+        return switch (try backend.write(data, cancellation)) {
+            .written => |n| .{ .written = n },
+            .interrupted => .interrupted,
+        };
+    }
+    return .backend_missing;
 }
 
 fn checkEmacsQuit(context: *const anyopaque) !void {

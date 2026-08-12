@@ -4,7 +4,7 @@
 
 ;; Author: Daniel Kraus <daniel@kraus.my>
 ;; URL: https://github.com/dakra/ghostel
-;; Version: 0.49.0
+;; Version: 0.50.0
 ;; Keywords: terminals
 ;; Package-Requires: ((emacs "28.1") (compat "30.1.0.1"))
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -905,7 +905,8 @@ to nil to disable the regex fallback entirely (OSC 133 only)."
 ;; Declare native module functions for the byte compiler
 
 (declare-function ghostel--encode-key "ghostel-module")
-(declare-function ghostel--encode-paste "ghostel-module" (term data))
+(declare-function ghostel--encode-paste "ghostel-module"
+                  (term data &optional require-bracketed))
 (declare-function ghostel--focus-event "ghostel-module")
 (declare-function ghostel--mode-enabled "ghostel-module")
 (declare-function ghostel--alt-screen-p "ghostel-module")
@@ -1763,17 +1764,16 @@ Signals a `user-error' when called outside a ghostel buffer."
   (ghostel--on-user-input)
   (ghostel--send-encoded key-name (or mods "")))
 
-(defun ghostel-paste-string (string)
-  "Send STRING to the terminal using bracketed paste.
+(defun ghostel-paste-string (string &optional require-bracketed)
+  "Send STRING to the terminal using its paste encoder.
 Signals a `user-error' when called outside a ghostel buffer.
 
-Unlike `ghostel-send-string', this wraps STRING in bracketed paste
-markers (ESC [200~ / ESC [201~) when the terminal supports bracketed
-paste mode (mode 2004), so the shell treats the input as an atomic
-paste rather than character-by-character typed keystrokes."
+When REQUIRE-BRACKETED is non-nil, refuse before writing unless DEC
+private mode 2004 is enabled.  Return exact t only after every encoded
+byte is accepted by the selected local transport."
   (ghostel--ensure-ghostel-buffer)
   (ghostel--on-user-input)
-  (ghostel--paste-text string))
+  (ghostel--paste-text string require-bracketed))
 
 
 ;;; Terminal control commands (C-c prefix)
@@ -1821,6 +1821,13 @@ overlay clears the way \\`keyboard-quit' would in other buffers."
 
 ;;; Paste / yank
 
+(define-error 'ghostel-paste-not-written
+  "Ghostel paste was not written")
+
+(define-error 'ghostel-bracketed-paste-unavailable
+  "Bracketed paste mode is unavailable"
+  'ghostel-paste-not-written)
+
 (defvar-local ghostel--yank-index 0
   "Current kill ring index for `ghostel-yank-pop'.")
 
@@ -1837,10 +1844,22 @@ the Unicode range with U+FFFD."
         (replace-regexp-in-string "[^\x0-\x10ffff]" (string #xFFFD) repaired))
     text))
 
-(defun ghostel--paste-text (text)
-  "Send TEXT to the terminal using the terminal paste encoder."
+(defun ghostel--paste-text (text &optional require-bracketed)
+  "Send TEXT through the terminal paste encoder.
+When REQUIRE-BRACKETED is non-nil, require DEC private mode 2004."
   (when text
-    (ghostel--encode-paste ghostel--term (ghostel--decode-paste-bytes text))))
+    (let ((result
+           (if require-bracketed
+               (ghostel--encode-paste
+                ghostel--term (ghostel--decode-paste-bytes text) t)
+             (ghostel--encode-paste
+              ghostel--term (ghostel--decode-paste-bytes text)))))
+      (pcase result
+        ('ghostel--paste-bracketed-unavailable
+         (signal 'ghostel-bracketed-paste-unavailable nil))
+        ('ghostel--paste-transport-missing
+         (signal 'ghostel-paste-not-written nil))
+        (_ result)))))
 
 (defun ghostel-paste ()
   "Paste text from the Emacs kill ring into the terminal.
