@@ -40,7 +40,7 @@ rendered_cursor: ?gt.Pin,
 /// Number of libghostty rows already materialized into the Emacs buffer.
 rows_in_buffer: usize = 0,
 
-/// Any pending resize as `.{cols, rows}`. Resizes are committed on next redraw.
+/// Pending grid resize, committed on the next redraw.
 pending_resize: ?ViewportSize = null,
 
 /// Accumulates adjacent dirty rows before inserting them into Emacs.
@@ -142,6 +142,12 @@ pub fn resize(self: *Self, cols: u16, rows: u16, cell_w: u32, cell_h: u32) !void
         .cell_w = cell_w,
         .cell_h = cell_h,
     };
+
+    // Applied now rather than at commit so size reports and kitty placement
+    // math see real cells before the first redraw. Not via `Terminal.resize`:
+    // that also clears synchronized-output mode.
+    self.term.width_px = @as(u32, self.term.cols) *| cell_w;
+    self.term.height_px = @as(u32, self.term.rows) *| cell_h;
 }
 
 pub fn redraw(self: *Self, env: emacs.Env, force_full: bool, force_sync: bool) !bool {

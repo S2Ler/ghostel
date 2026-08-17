@@ -21,6 +21,11 @@ All notable changes to this project will be documented in this file.
 - `ghostel-query-before-killing` set to `auto` no longer stays armed at
   an idle prompt after a command that never reports completion, such
   as `exec zsh`.
+- A program that queries the cell size on its first output (timg,
+  kitty graphics viewers started via `ghostel-exec`) no longer gets
+  a 1×1 px answer to XTWINOPS CSI 14/16 t and stretches its images;
+  the cell geometry now applies before the first redraw.  Fixes
+  [#642](https://github.com/dakra/ghostel/issues/642).
 
 ## [0.53.0] — 2026-09-02
 
