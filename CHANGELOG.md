@@ -5,6 +5,9 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- Repeated output to a hidden terminal reuses its known visibility state.
+  Parsing and semantic callbacks still run. Revealing the terminal or sending
+  input restores window discovery and normal redraw scheduling.
 - `ghostel-paste-string` now accepts an optional strict bracketed-paste
   policy.  Strict calls refuse with a `ghostel-paste-not-written`
   condition when mode 2004 or a local transport is definitely absent,

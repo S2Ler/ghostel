@@ -1,5 +1,21 @@
 # Ghostel
 
+This is the `perf/many-tuis` branch of [S2Ler/ghostel](https://github.com/S2Ler/ghostel),
+based on the locally installed 0.50.0 revision. It preserves strict-paste
+receipts and reduces window searches for hidden terminals. Parsing and title
+updates continue while a terminal is hidden.
+
+Use this Elpaca recipe to select the branch:
+
+```emacs-lisp
+(use-package ghostel
+  :ensure (:host github :repo "S2Ler/ghostel" :branch "perf/many-tuis"))
+```
+
+Build the native module from this branch with `make build`. Upstream release
+binaries do not provide its strict-paste contract. The upstream documentation
+and installation examples follow below.
+
 [![MELPA](https://melpa.org/packages/ghostel-badge.svg)](https://melpa.org/#/ghostel)
 [![MELPA Stable](https://stable.melpa.org/packages/ghostel-badge.svg)](https://stable.melpa.org/#/ghostel)
 [![CI](https://github.com/dakra/ghostel/actions/workflows/ci.yml/badge.svg)](https://github.com/dakra/ghostel/actions/workflows/ci.yml)
