@@ -4803,14 +4803,16 @@ them during synchronized output or when BUFFER has no render window."
           ;; Pause line mode if alt-screen just turned on.  This must run
           ;; before the snapshot so a pause can take ownership of its input.
           (ghostel--line-mode-pre-redraw)
-          (let* ((anchored (ghostel--anchored-windows buffer t))
+          ;; Anchor probes temporarily select windows on other frames too.
+          ;; Protect those selections from shrinking an active minibuffer.
+          (let* ((inhibit-redisplay t)
+                 (anchored (ghostel--anchored-windows buffer t))
                  ;; Line-mode input is not part of libghostty's grid.  Remove
                  ;; it while native rendering runs, then restore it after
                  ;; rendering.
                  (line-snapshot (and (eq ghostel--input-mode 'line)
                                      (ghostel--line-mode-snapshot)))
                  (inhibit-read-only t)
-                 (inhibit-redisplay t)
                  (inhibit-modification-hooks t)
                  (gc-cons-threshold most-positive-fixnum)
                  (rendered
