@@ -97,6 +97,21 @@ SPEC is (BUFFER TERM ANCHORED-WINDOW HISTORY-WINDOW)."
                 ,@body))
          (set-window-configuration orig-config)))))
 
+(ert-deftest ghostel-test-redraw-inhibits-redisplay-during-anchor-snapshot ()
+  "Window selection while checking anchors must not resize a minibuffer."
+  :tags '(native)
+  (ghostel-test-scroll--with-buffer (buf term 5 40 100)
+    (let ((anchored-windows (symbol-function 'ghostel--anchored-windows))
+          checked)
+      (cl-letf (((symbol-function 'ghostel--anchored-windows)
+                 (lambda (&rest args)
+                   (setq checked t)
+                   (should inhibit-redisplay)
+                   (apply anchored-windows args))))
+        (ghostel--write-vt term "output")
+        (ghostel--redraw-now buf))
+      (should checked))))
+
 (ert-deftest ghostel-test-clear-scrollback-scrolls-to-viewport ()
   "Clearing scrollback leaves the window at the live viewport."
   :tags '(native)
