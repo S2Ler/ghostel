@@ -204,6 +204,12 @@ pub fn pidValue(self: *Self) i64 {
     return self.pid;
 }
 
+pub fn hasTransport(self: *Self) !bool {
+    try self.backend_handoff_mutex.lock(self.io);
+    defer self.backend_handoff_mutex.unlock(self.io);
+    return self.backend != null and !@atomicLoad(bool, &self.quit, .monotonic);
+}
+
 fn effectFallible(self: *Self, comptime func: []const u8, args: anytype) !void {
     try self.writeEvent("(");
     try self.writeEvent(func);

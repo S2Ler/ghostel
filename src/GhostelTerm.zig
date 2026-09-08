@@ -9,6 +9,7 @@ const emacs = @import("emacs.zig");
 const gt = @import("ghostty-vt");
 const GhostelHandler = @import("handler.zig").GhostelHandler;
 const Renderer = @import("Renderer.zig");
+const TerminalSnapshot = @import("TerminalSnapshot.zig");
 const input = @import("input.zig");
 const kitty_graphics = @import("kitty_graphics.zig");
 const utils = @import("utils.zig");
@@ -149,15 +150,101 @@ fn ptyWriteReceipt(self: *Self, data: []const u8) !PtyWriteReceipt {
 
     const process = env.symbolValue("ghostel--process");
     if (env.isNil(process)) return .transport_missing;
-    const live = env.funcall(env.intern("process-live-p"), &env.makeValues(.{process}));
+    // The native lifecycle pipe can outlive its PTY while the reaper waits.
+    // It is never a replacement transport for terminal input.
+    if (env.isNotNil(env.f("process-get", .{ process, emacs.sym.@"ghostel--native-pid" }))) return .transport_missing;
+    const live = env.f("process-live-p", .{process});
     if (env.nonLocalExitCheck() != .normal) return .emacs_exit;
     if (env.isNil(live)) return .transport_missing;
 
-    _ = env.funcall(
-        @field(emacs.sym, "process-send-string"),
-        &env.makeValues(.{ process, data }),
-    );
+    const bytes = env.makeUnibyteString(data) orelse return .transport_missing;
+    _ = env.f("process-send-string", .{ process, bytes });
     return if (env.nonLocalExitCheck() == .normal) .complete else .emacs_exit;
+}
+
+fn controlFailure(env: emacs.Env, outcome: emacs.Value, reason: emacs.Value) emacs.Value {
+    return env.list(.{ emacs.sym.@":outcome", outcome, emacs.sym.@":reason", reason });
+}
+
+fn controlWrite(self: *Self, env: emacs.Env, bytes: []const u8) emacs.Value {
+    const s = emacs.sym;
+    const receipt = self.ptyWriteReceipt(bytes) catch {
+        env.nonLocalExitClear();
+        return controlFailure(env, s.uncertain, s.@"transport-error");
+    };
+    return switch (receipt) {
+        .complete => env.list(.{ s.@":outcome", s.@"accepted-locally", s.@":utf8-bytes", bytes.len }),
+        .transport_missing => controlFailure(env, s.@"not-written", s.@"transport-missing"),
+        .interrupted => controlFailure(env, s.uncertain, s.@"transport-error"),
+        .emacs_exit => result: {
+            env.nonLocalExitClear();
+            break :result controlFailure(env, s.uncertain, s.@"transport-error");
+        },
+    };
+}
+
+fn controlInput(self: *Self, env: emacs.Env, kind: emacs.Value, value: emacs.Value, modifiers: emacs.Value) !emacs.Value {
+    const s = emacs.sym;
+    var storage: ?[]u8 = null;
+    defer if (storage) |bytes| self.alloc.free(bytes);
+    const data = try env.extractStringAlloc(self.alloc, value, &storage);
+
+    if (env.eq(kind, s.type)) return self.controlWrite(env, data);
+
+    if (env.eq(kind, s.paste)) {
+        const options = options: {
+            try self.lockTerm();
+            defer self.unlockTerm();
+            break :options gt.input.PasteOptions.fromTerminal(&self.terminal);
+        };
+        if (!options.bracketed) return controlFailure(env, s.@"not-written", s.@"bracketed-paste-unavailable");
+
+        const slices = gt.input.encodePaste(@as([]u8, data), options);
+        var len: usize = 0;
+        for (slices) |slice| len += slice.len;
+        const transaction = try self.alloc.alloc(u8, len);
+        defer self.alloc.free(transaction);
+        var offset: usize = 0;
+        for (slices) |slice| {
+            @memcpy(transaction[offset..][0..slice.len], slice);
+            offset += slice.len;
+        }
+        return self.controlWrite(env, transaction);
+    }
+
+    if (env.eq(kind, s.key)) {
+        var mods_buffer: [32]u8 = undefined;
+        const mods = try env.extractString(modifiers, &mods_buffer);
+        var event = input.keyEvent(data, mods, null);
+        if (event.key == .unidentified) return controlFailure(env, s.@"not-written", s.@"key-unencodable");
+        var shifted: [1]u8 = undefined;
+        if (event.mods.shift and data.len == 1) {
+            // Unlike Emacs keyboard events, semantic control keys carry
+            // unshifted names, so their generated text must consume Shift here.
+            shifted[0] = switch (data[0]) {
+                'a'...'z' => std.ascii.toUpper(data[0]),
+                '0'...'9' => ")!@#$%^&*("[data[0] - '0'],
+                '-' => '_',
+                else => data[0],
+            };
+            event.utf8 = &shifted;
+            event.consumed_mods.shift = true;
+        }
+        var buffer: [128]u8 = undefined;
+        var writer = std.Io.Writer.fixed(&buffer);
+        {
+            try self.lockTerm();
+            defer self.unlockTerm();
+            var options = gt.input.KeyEncodeOptions.fromTerminal(&self.terminal);
+            options.macos_option_as_alt = .true;
+            try gt.input.encodeKey(&writer, event, options);
+        }
+        const bytes = writer.buffered();
+        if (bytes.len == 0) return controlFailure(env, s.@"not-written", s.@"key-unencodable");
+        return self.controlWrite(env, bytes);
+    }
+
+    return error.InvalidControlOperation;
 }
 
 pub fn ptyWriteFromTerminal(self: *Self, data: []const u8) void {
@@ -407,6 +494,80 @@ fn getProcessEnvironment(alloc: Allocator, env: emacs.Env) !std.process.Environ.
 // ---------------------------------------------------------------------------
 
 pub const emacs_functions = [_]emacs.FunctionEntry{
+    .{
+        .name = "ghostel--terminal-control-native-process-p",
+        .arity = .{ 2, 2 },
+        .doc = "Return non-nil when TERM retains its native transport for PID.",
+        .impl = struct {
+            pub fn call(env: emacs.Env, _: isize, args: [*c]emacs.Value) !emacs.Value {
+                const term = env.getUserPtr(Self, args[0]) orelse return error.InvalidTerminalHandle;
+                const process = term.process orelse return env.nil();
+                return env.makeValue(process.pidValue() == env.cast(i64, args[1]) and try process.hasTransport());
+            }
+        },
+    },
+    .{
+        .name = "ghostel--terminal-control-api-version",
+        .arity = .{ 0, 0 },
+        .doc = "Return the native terminal-control API version.",
+        .impl = struct {
+            pub fn call(env: emacs.Env, _: isize, _: [*c]emacs.Value) !emacs.Value {
+                return env.makeInteger(1);
+            }
+        },
+    },
+    .{
+        .name = "ghostel--terminal-snapshot-tail",
+        .arity = .{ 3, 3 },
+        .doc = "Capture bounded terminal text and metadata without rendering.",
+        .impl = struct {
+            pub fn call(env: emacs.Env, _: isize, args: [*c]emacs.Value) !emacs.Value {
+                const s = emacs.sym;
+                const term = env.getUserPtr(Self, args[0]) orelse return error.InvalidTerminalHandle;
+                const max_lines = std.math.cast(usize, env.cast(i64, args[1])) orelse return error.OutOfRange;
+                const max_bytes = std.math.cast(usize, env.cast(i64, args[2])) orelse return error.OutOfRange;
+                if (max_lines == 0 or max_lines > 1000 or max_bytes == 0 or max_bytes > 96 * 1024) return error.OutOfRange;
+                try term.lockTerm();
+                defer term.unlockTerm();
+                var snapshot = try TerminalSnapshot.capture(term.alloc, &term.terminal, max_lines, max_bytes);
+                defer snapshot.deinit(term.alloc);
+                const mode = env.symbolValue("ghostel--input-mode");
+                const screen = term.terminal.screens.active;
+                return env.list(.{
+                    s.@":outcome",                   s.ok,
+                    s.@":text",                      snapshot.text(),
+                    s.@":logical-lines",             snapshot.logical_lines,
+                    s.@":utf8-bytes",                snapshot.text().len,
+                    s.@":screen",                    if (term.terminal.screens.active_key == .primary) s.primary else s.alternate,
+                    s.@":includes-scrollback",       snapshot.includes_scrollback,
+                    s.@":columns",                   term.terminal.cols,
+                    s.@":rows",                      term.terminal.rows,
+                    s.@":cursor",                    env.list(.{ s.@":column", screen.cursor.x, s.@":row", screen.cursor.y }),
+                    s.@":truncated-before",          snapshot.truncated_before,
+                    s.@":first-line-partial",        snapshot.first_line_partial,
+                    s.@":input-mode",                mode,
+                    s.@":emacs-local-input-omitted", env.eq(mode, s.line),
+                    s.@":graphics",                  s.omitted,
+                });
+            }
+        },
+    },
+    .{
+        .name = "ghostel--terminal-control-input",
+        .arity = .{ 4, 4 },
+        .doc = "Enter one terminal input transaction and return its closed receipt.",
+        .impl = struct {
+            pub fn call(env: emacs.Env, _: isize, args: [*c]emacs.Value) !emacs.Value {
+                const term = env.getUserPtr(Self, args[0]) orelse return error.InvalidTerminalHandle;
+                return term.controlInput(env, args[1], args[2], args[3]) catch {
+                    // Transport entry normalizes its own failures.  Remaining
+                    // errors occur before any byte has been offered.
+                    env.nonLocalExitClear();
+                    return controlFailure(env, emacs.sym.@"not-executed", emacs.sym.@"internal-error");
+                };
+            }
+        },
+    },
     .{
         .name = "ghostel--new",
         .arity = .{ 2, 5 },

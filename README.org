@@ -1854,6 +1854,83 @@ Both operate on the current buffer; wrap in =with-current-buffer= when driving
 another ghostel buffer.  Calling either outside a ghostel buffer signals a
 =user-error=.
 
+*** Bounded terminal control
+#+findex: ghostel-terminal-control-capabilities
+#+findex: ghostel-terminal-snapshot-tail
+#+findex: ghostel-terminal-control-type
+#+findex: ghostel-terminal-control-paste
+#+findex: ghostel-terminal-control-key
+
+The terminal-control API reads the native terminal model and returns explicit
+receipts for input.  Every operation uses the current Ghostel buffer and checks
+its bound live process and terminal handle.
+Native sessions also require their bound PTY transport to remain available.
+
+First call =ghostel-terminal-control-capabilities=.  A matching Elisp and native
+module returns this plist:
+
+#+begin_src emacs-lisp
+(:api-version 1 :native-api-version 1 :snapshot-tail t :input-receipts t)
+#+end_src
+
+The two capability flags are independent.  A missing or mismatched native API
+returns nil.  The probe does not load or replace a native module.  An existing
+Emacs process keeps its loaded module until a normal restart.
+
+#+begin_src emacs-lisp
+(ghostel-terminal-snapshot-tail 100 98304)
+(ghostel-terminal-control-type "review this")
+(ghostel-terminal-control-paste "first line\nsecond line")
+(ghostel-terminal-control-key "up" '(shift))
+(ghostel-terminal-control-key "return" nil)
+#+end_src
+
+=ghostel-terminal-snapshot-tail= accepts 1 through 1000 logical lines and 1
+through 98304 UTF-8 bytes.  It returns the newest suffix.  It joins soft wraps,
+trims trailing blank cells and rows, and adds no final LF.  Alternate-screen
+reads include only the alternate grid.  Primary reads can include retained
+history.  The implementation walks backward through native cells with a fixed
+byte limit and captures metadata under the same terminal lock.
+
+A successful snapshot contains =:outcome ok=, =:text=, =:logical-lines=,
+=:utf8-bytes=, =:screen= (=primary= or =alternate=), =:includes-scrollback=,
+=:columns=, =:rows=, and =:cursor= with zero-based =:column= and =:row=.
+It also contains =:truncated-before=, =:first-line-partial=, =:input-mode=,
+=:emacs-local-input-omitted=, and =:graphics omitted=.  Boolean values are t or
+nil.  A failure returns =(:outcome not-executed :reason unavailable)= or the
+same outcome with =internal-error=.
+
+Type and paste accept 1 through 65536 UTF-8 bytes of Unicode scalar text.
+Type rejects control characters.  Paste also permits TAB and LF, but rejects
+CR.  Unicode formatting characters remain valid.  Neither operation appends
+Return.  Paste requires bracketed-paste mode and sends one complete transaction.
+There is no unbracketed fallback.
+
+Key names contain 1 through 64 lowercase ASCII letters, digits, or hyphens.
+Modifiers are a proper, duplicate-free list of =shift=, =alt=, and =ctrl=.
+The native terminal encoder selects the sequence for the current terminal mode.
+An unsupported key returns =not-written= with reason =key-unencodable=.
+The canonical submit operation is ="return"= with nil modifiers.
+
+Input receipts contain one of these outcomes:
+
+| Outcome            | Meaning                                                        |
+|--------------------+----------------------------------------------------------------|
+| =accepted-locally=  | The local transport accepted every encoded byte.                |
+| =not-executed=      | Validation or a local guard prevented transport entry.          |
+| =not-written=       | The native operation proved that it offered no bytes.           |
+| =uncertain=         | Complete local acceptance or the final result cannot be proved. |
+
+An accepted receipt includes =:utf8-bytes=.  This counts the complete transport
+encoding, including paste framing or a key sequence.  Other outcomes include a
+bounded symbol in =:reason=.  Receipts do not establish that the child consumed
+or acted on input.  Never retry an uncertain operation automatically.
+
+Input refuses line mode and positive password-input state.  A successful local
+PTY probe also refuses canonical mode with echo disabled.  A failed or
+unavailable probe permits input.  Operations do not change point, mark, focus,
+or input mode.  Snapshots omit any Emacs line draft and do not force redisplay.
+
 ** Project integration
 :properties:
 :custom_id: project-integration

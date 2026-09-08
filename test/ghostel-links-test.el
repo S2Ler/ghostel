@@ -1607,7 +1607,7 @@ Off a link it falls back to `find-file-at-point'."
   "Captured (FN . ARGS) of every pending plain-link detection tick.")
 
 (defvar ghostel-test--link-regions nil
-  "The (BEGIN . END) each drained detection tick asked for, newest first.")
+  "The actual (BEGIN . END) each detection tick scanned, newest first.")
 
 (defmacro ghostel-test--with-link-timers (&rest body)
   "Run BODY with plain-link detection timers captured, not scheduled.
@@ -1635,13 +1635,15 @@ slots, where `cancel-timer' later runs on it."
                     timer)))
                ((symbol-function 'ghostel--detect-urls)
                 (lambda (&optional begin end)
-                  (push (cons begin end) ghostel-test--link-regions)
-                  (funcall ghostel-test--real-detect-urls begin end))))
+                  (let ((region (funcall ghostel-test--real-detect-urls
+                                         begin end)))
+                    (push region ghostel-test--link-regions)
+                    region))))
        ,@body)))
 
 (defun ghostel-test--drain-link-detection ()
   "Run captured plain-link detection ticks until none are pending.
-Return the (BEGIN . END) each tick asked for, oldest first."
+Return the actual (BEGIN . END) each tick scanned, oldest first."
   (let ((ticks 0))
     (while (and ghostel-test--link-timers (< ticks 500))
       (let ((call (pop ghostel-test--link-timers)))
@@ -1691,11 +1693,12 @@ line's path."
         ;; Newest end first: tick 1 covers the tail, not the whole range.
         (should (= (cdr (car regions)) (point-max)))
         (should (> (car (car regions)) (point-min)))
-        ;; Each tick resumes where the previous one started, walking down
-        ;; to the queued begin with no row left between two ticks.
+        ;; Whole-line widening can overlap the boundary row.  Coverage must
+        ;; have no gap, and both bounds must progress toward the start.
         (cl-loop for (this next) on regions
                  while next
-                 do (should (<= (cdr next) (car this)))
+                 do (should (>= (cdr next) (car this)))
+                    (should (< (cdr next) (cdr this)))
                     (should (< (car next) (car this))))
         (should (= (car (car (last regions))) (point-min)))
         (should (= lines (length (ghostel-test--link-runs))))
