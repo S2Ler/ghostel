@@ -25,6 +25,75 @@ pub fn emitPlacements(env: emacs.Env, term: *GhostelTerm) !void {
             entry.value_ptr,
         ) catch continue;
     }
+    emitVirtualRuns(env, term, storage);
+}
+
+/// Emit one Elisp call per unicode placeholder run from the row this
+/// redraw's render started at down to the last active row, covering rows
+/// that left the active area since the previous redraw.
+fn emitVirtualRuns(env: emacs.Env, term: *GhostelTerm, storage: *const gt.kitty.graphics.ImageStorage) void {
+    if (storage.placements.count() == 0) return;
+    const pages = &term.terminal.screens.active.pages;
+    const top = term.renderer.rendered_from orelse return;
+    const bottom = pages.getBottomRight(.active) orelse return;
+    const bottom_y = (pages.pointFromPin(.screen, bottom) orelse return).screen.y;
+    var it = gt.kitty.graphics.unicode.placementIterator(top, bottom);
+    // Image data handed to Emacs, per image id, for this redraw only.
+    var images: std.AutoHashMapUnmanaged(u32, emacs.Value) = .empty;
+    defer images.deinit(term.alloc);
+    // Per-run errors skip that run only.
+    while (it.next()) |run| {
+        emitVirtualRun(env, term, storage, &run, bottom_y, &images) catch continue;
+    }
+}
+
+fn emitVirtualRun(
+    env: emacs.Env,
+    term: *GhostelTerm,
+    storage: *const gt.kitty.graphics.ImageStorage,
+    run: *const gt.kitty.graphics.unicode.Placement,
+    bottom_y: u32,
+    images: *std.AutoHashMapUnmanaged(u32, emacs.Value),
+) !void {
+    const image = storage.images.getPtr(run.image_id) orelse return error.ImageNotFound;
+    const target = storage.placeholderTarget(run.image_id, run.placement_id) orelse return error.PlacementNotFound;
+    if (target.placement.location != .virtual) return error.PlacementNotFound;
+
+    const t = &term.terminal;
+    const grid_cols = if (target.placement.columns > 0) target.placement.columns else try cellsFor(image.width, t.width_px, t.cols);
+    const grid_rows = if (target.placement.rows > 0) target.placement.rows else try cellsFor(image.height, t.height_px, t.rows);
+
+    // Elisp locates the run by counting placeholders on its row.
+    var ordinal: u32 = 0;
+    for (run.pin.cells(.left)[0..run.pin.x]) |*cell| {
+        if (cell.codepoint() == gt.kitty.graphics.unicode.placeholder) ordinal += 1;
+    }
+    const pin_screen = t.screens.active.pages.pointFromPin(.screen, run.pin) orelse return error.NotVisible;
+
+    const val = images.get(run.image_id) orelse val: {
+        const data = try getImageData(term.alloc, image);
+        defer term.alloc.free(data);
+        const v = env.makeUnibyteString(data) orelse return error.MakeString;
+        try images.put(term.alloc, run.image_id, v);
+        break :val v;
+    };
+    _ = env.f("ghostel--kitty-display-virtual", .{
+        val,
+        bottom_y - pin_screen.screen.y,
+        ordinal,
+        run.row,
+        run.col,
+        run.width,
+        grid_cols,
+        grid_rows,
+    });
+}
+
+/// Cells covering `px` pixels at the terminal's cell pitch.
+fn cellsFor(px: u32, total_px: u32, count: usize) !u32 {
+    const cell: u32 = @intCast(total_px / count);
+    if (cell == 0) return error.NoCellSize;
+    return (px + cell - 1) / cell;
 }
 
 fn emitOnePlacement(
@@ -36,17 +105,8 @@ fn emitOnePlacement(
 ) !void {
     const image = storage.images.getPtr(key.image_id) orelse return error.ImageNotFound;
     switch (placement.location) {
-        .virtual => {
-            const data = try getImageData(term.alloc, image);
-            defer term.alloc.free(data);
-
-            // Virtual placements (yazi-style U+10EEEE unicode placeholders).
-            // The API doesn't provide viewport positions — Elisp searches
-            // the buffer for placeholder characters.
-            const img_val = env.makeUnibyteString(data) orelse return error.MakeString;
-            var args = [_]emacs.Value{img_val};
-            _ = env.funcall(emacs.sym.@"ghostel--kitty-display-virtual", &args);
-        },
+        // Drawn from its placeholder runs by emitVirtualRuns.
+        .virtual => return,
         .pin => |pin| try emitPinned(env, term, image, placement, pin, 0, 0),
         .relative => |rel| {
             // An unresolvable chain is never drawn.
@@ -61,9 +121,8 @@ fn emitOnePlacement(
                     chain.horizontal_offset,
                     chain.vertical_offset,
                 ),
-                // Not drawn: the Elisp virtual path applies one image to
-                // every placeholder run without attributing runs to an
-                // image id, so there is no anchor to offset from.
+                // Not implemented: kitty anchors these at the top-left
+                // placeholder cell of the parent's runs.
                 .virtual => return error.NotVisible,
                 .relative => unreachable,
             }

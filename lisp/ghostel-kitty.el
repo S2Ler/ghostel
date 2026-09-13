@@ -143,14 +143,9 @@ the buffer line is long enough to hold the placement's column range."
   "Display a kitty graphics image placement in the buffer.
 Called from the native module during redraw for each visible placement.
 DATA is a unibyte PPM string.
-ABS-ROW is the absolute buffer row (0-indexed from `point-min'),
-already accounting for materialized scrollback (the C side adds
-`scrollback_in_buffer' to libghostty's viewport-relative row before
-passing it here).  Without that pre-shift, an image at viewport row 0
-would render at the top of the scrollback, jumping into the past as
-soon as anything scrolled.  May be negative when the image's top is
-above the buffer's first line (rare — only when libghostty's scrollback
-got trimmed below the placement's anchor).
+ABS-ROW is the buffer row (0-indexed from `point-min') of the image's
+top: libghostty's screen row, which the renderer keeps equal to the
+buffer line.  May be negative when the top is above the first line.
 VP-COL is the column (may be negative — image partially off the left).
 GRID-COLS and GRID-ROWS are the cell dimensions.
 PIXEL-W and PIXEL-H are the rendered pixel dimensions.
@@ -220,83 +215,51 @@ user shouldn't have to trigger one)."
        (setq ghostel--kitty-last-error err)
        (message "ghostel: kitty image error: %S" err)))))
 
-(defun ghostel--kitty-display-virtual (data)
-  "Display a virtual kitty graphics placement (unicode placeholders).
-Searches the buffer for U+10EEEE placeholder characters and overlays
-per-row image slices on the placeholder regions of each line.
-DATA is a unibyte PPM string."
+(defun ghostel--kitty-display-virtual (data row-up nth img-row img-col
+                                            width grid-cols grid-rows)
+  "Display one placeholder run of a virtual kitty placement.
+DATA is a unibyte PPM string.  ROW-UP is the run's row counted up from
+the last screen row (0 = last row); its first cell is the NTH (0-based)
+U+10EEEE placeholder on that row.  IMG-ROW and IMG-COL are the image
+cell it starts at, WIDTH its length in cells, GRID-COLS and GRID-ROWS
+the whole image.  Cells are located by counting placeholders, since
+their combining diacritics make buffer width differ from cell width."
   (when (display-graphic-p)
     (condition-case err
-        (let ((placeholder (string #x10EEEE))
-              (cw (default-font-width))
-              (ch (default-font-height))
-              grid-cols grid-rows img)
+        (let* ((cw (default-font-width))
+               (ch (default-font-height))
+               (img (create-image data 'pbm t
+                                  :width (* grid-cols cw)
+                                  :height (* grid-rows ch)
+                                  :scale 1
+                                  :ascent 'center)))
           (save-excursion
-            ;; First pass: measure the grid by walking the buffer line by
-            ;; line and counting placeholders.  Tracks the *maximum* count
-            ;; across rows so a short first row doesn't undersize the
-            ;; image.  Avoids `line-number-at-pos' in the search loop —
-            ;; that's O(buffer size) per call and was the dominant cost
-            ;; for large yazi previews.
-            (goto-char (point-min))
-            (let ((max-line-cols 0)
-                  (total-rows 0))
-              (while (not (eobp))
-                (let ((eol (line-end-position))
-                      (this-row 0))
-                  (save-excursion
-                    (while (search-forward placeholder eol t)
-                      (setq this-row (1+ this-row))))
-                  (when (> this-row 0)
-                    (setq total-rows (1+ total-rows))
-                    (when (> this-row max-line-cols)
-                      (setq max-line-cols this-row))))
-                (forward-line 1))
-              (setq grid-cols (max 1 max-line-cols))
-              (setq grid-rows (max 1 total-rows)))
-            ;; Create the image sized to the full grid.  `:ascent center'
-            ;; aligns each slice around the line's vertical center so it
-            ;; tiles flush with adjacent slices regardless of the line's
-            ;; baseline (the default `:ascent 50' splits the slice across
-            ;; the baseline, leaving visible offsets between rows).
-            (setq img (create-image data 'pbm t
-                                    :width (* grid-cols cw)
-                                    :height (* grid-rows ch)
-                                    :scale 1
-                                    :ascent 'center))
-            ;; Second pass: apply per-row slices on placeholder regions.
-            ;; Walks line by line — `line-end-position' is O(1) with no
-            ;; full-buffer scan per placeholder.
-            (goto-char (point-min))
-            (let ((row 0))
-              (while (not (eobp))
-                (let* ((eol (line-end-position))
-                       (line-start (save-excursion
-                                     (search-forward placeholder eol t))))
-                  (when line-start
-                    (let ((line-end eol))
-                      (setq line-start (1- line-start))
-                      (when (> line-end line-start)
-                        (add-text-properties
-                         line-start line-end
-                         (list 'display (list (list 'slice 0 (* row ch)
-                                                    (* grid-cols cw) ch)
-                                              img)
-                               'ghostel-kitty t))
-                        ;; Clamp the placeholder line to `ch' so the slice
-                        ;; tiles flush and the file-list column on the same
-                        ;; line doesn't grow taller than non-image lines.
-                        ;; The U+10EEEE fallback font and any Nerd Font
-                        ;; icons would otherwise pull line height above the
-                        ;; buffer's default font height, leaving gaps below
-                        ;; the slice and above the next line's content.
-                        (when (< line-end (point-max))
-                          (add-text-properties line-end (1+ line-end)
-                                               (list 'line-height ch
-                                                     'ghostel-kitty t)))
-                        (setq ghostel--kitty-active t)))
-                    (setq row (1+ row))))
-                (forward-line 1)))))
+            ;; The last screen row is the line before the final newline.
+            (goto-char (point-max))
+            (let ((ph (string #x10EEEE)))
+              (when (and (zerop (forward-line (- (1+ row-up))))
+                         (search-forward ph (line-end-position) t (1+ nth)))
+                (let ((start (1- (point)))
+                      (eol (line-end-position)))
+                  (when (or (= width 1)
+                            (search-forward ph eol t (1- width)))
+                    (while (and (< (point) eol)
+                                (eq (get-char-code-property
+                                     (char-after) 'general-category)
+                                    'Mn))
+                      (forward-char))
+                    (add-text-properties
+                     start (point)
+                     (list 'display (list (list 'slice (* img-col cw) (* img-row ch)
+                                                (* width cw) ch)
+                                          img)
+                           'ghostel-kitty t))
+                    ;; Clamp the line to `ch' so the slice tiles flush; the
+                    ;; placeholder fallback font would otherwise grow the line.
+                    (add-text-properties eol (1+ eol)
+                                         (list 'line-height ch
+                                               'ghostel-kitty t))
+                    (setq ghostel--kitty-active t)))))))
       (error
        (setq ghostel--kitty-last-error err)
        (message "ghostel: kitty virtual image error: %S" err)))))

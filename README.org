@@ -915,10 +915,10 @@ Wayland with fractional scaling or non-standard DPI), set an explicit number.
   sub-region of the source image (=x=, =y=, =w=, =h= in the kitty protocol) are
   refused with an explicit error rather than silently mis-rendering.  Full-image
   placements - what timg, yazi, and =kitty +kitten icat= use - are unaffected.
-- *Multiple simultaneous virtual placements share rendering.*  Unicode-placeholder
-  placements that coexist in the same buffer are rendered as a single image; the
-  most recent transmission wins.  =yazi='s preview pane uses one image at a time,
-  so this has not been a problem in practice.
+- *Virtual placements are stretched to their cell grid.*  A unicode-placeholder
+  placement whose =c=/=r= grid has a different aspect ratio than the image is
+  scaled to fill the grid, where kitty and Ghostty letterbox it.  =yazi= and
+  =timg= size the grid to the image, so the difference stays under one cell.
 
 ** Calling Elisp from the shell
 :properties:
