@@ -529,6 +529,17 @@ side effects have to happen explicitly inside the command."
           (should (equal sent '(("g" . "ctrl")))))
       (kill-buffer buf))))
 
+(ert-deftest ghostel-test-user-input-deactivates-mark ()
+  "Explicit terminal input clears an active region.
+Input goes to the PTY, not the buffer, so no buffer edit deactivates the mark."
+  (let ((transient-mark-mode t))
+    (with-temp-buffer
+      (insert "hello world")
+      (set-mark (point-min))
+      (should (region-active-p))
+      (ghostel--on-user-input)
+      (should-not (region-active-p)))))
+
 (ert-deftest ghostel-test-c-g-binding-routes-through-send-handler ()
   "Quit binding must route through the quit handler in both live input modes.
 `ghostel--define-terminal-keys' binds every control-letter to

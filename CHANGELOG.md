@@ -10,6 +10,10 @@ All notable changes to this project will be documented in this file.
   (`auto`, needs OSC 133 shell integration) or a live process (`t`).
 
 ### Fixed
+- Typing after a mouse selection with `ghostel-mouse-drag-input-mode`
+  nil no longer extends the region up to the prompt: explicit terminal
+  input clears the selection, as in a terminal.
+  Fixes [#674](https://github.com/dakra/ghostel/issues/674).
 - `ghostel-query-before-killing` set to `auto` no longer stays armed at
   an idle prompt after a command that never reports completion, such
   as `exec zsh`.

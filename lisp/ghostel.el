@@ -1575,6 +1575,7 @@ Returns the sequence string, or nil for unknown keys."
 
 (defun ghostel--on-user-input ()
   "Handle common state before explicit user input reaches the terminal."
+  (deactivate-mark)
   (when (and ghostel-readonly-fast-exit
              (memq ghostel--input-mode '(copy emacs)))
     (ghostel-readonly-exit))
