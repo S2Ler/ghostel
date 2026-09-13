@@ -7,6 +7,13 @@ pub const ProcessParams = struct {
     cwd: ?[:0]const u8 = null,
 };
 
+pub const WinSize = struct {
+    cols: u16,
+    rows: u16,
+    xpixel: u16 = 0,
+    ypixel: u16 = 0,
+};
+
 pub const CancellationToken = struct {
     context: *const anyopaque,
     check_fn: *const fn (*const anyopaque) anyerror!void,

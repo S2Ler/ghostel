@@ -14,6 +14,10 @@ All notable changes to this project will be documented in this file.
   (`auto`, needs OSC 133 shell integration) or a live process (`t`).
 
 ### Fixed
+- The native PTY's window size (`TIOCGWINSZ`) carries the cell pixel
+  geometry, so image tools that size kitty graphics from it (broot,
+  ranger) no longer fall back to text rendering.
+  Fixes [#675](https://github.com/dakra/ghostel/issues/675).
 - Typing after a mouse selection with `ghostel-mouse-drag-input-mode`
   nil no longer extends the region up to the prompt: explicit terminal
   input clears the selection, as in a terminal.

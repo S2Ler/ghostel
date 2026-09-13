@@ -57,13 +57,12 @@ pub fn init(
     self: *Self,
     alloc: Allocator,
     io: std.Io,
-    initial_cols: u16,
-    initial_rows: u16,
+    size: backend_types.WinSize,
     params: ProcessParams,
     owner: *GhostelTerm,
     event_fd: ChannelFd,
 ) !void {
-    var backend = try Backend.init(alloc, io, initial_cols, initial_rows, params);
+    var backend = try Backend.init(alloc, io, size, params);
     errdefer _ = backend.deinitAndWait();
 
     var event_writer = try EventWriter.init(event_fd);
@@ -157,11 +156,11 @@ fn checkEmacsQuit(context: *const anyopaque) !void {
     try env.checkQuit();
 }
 
-pub fn resizePty(self: *Self, cols: u16, rows: u16) !void {
+pub fn resizePty(self: *Self, size: backend_types.WinSize) !void {
     try self.backend_handoff_mutex.lock(self.io);
     defer self.backend_handoff_mutex.unlock(self.io);
 
-    if (self.backend) |*backend| try backend.resize(cols, rows);
+    if (self.backend) |*backend| try backend.resize(size);
 }
 
 pub fn effect(self: *Self, comptime func: []const u8, args: anytype) void {

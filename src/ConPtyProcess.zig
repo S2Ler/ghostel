@@ -178,7 +178,7 @@ pub const EventWriter = struct {
     }
 };
 
-pub fn init(alloc: Allocator, io: std.Io, initial_cols: u16, initial_rows: u16, params: backend_types.ProcessParams) !Self {
+pub fn init(alloc: Allocator, io: std.Io, size: backend_types.WinSize, params: backend_types.ProcessParams) !Self {
     try initApi();
 
     var self: Self = .{ .alloc = alloc };
@@ -193,7 +193,7 @@ pub fn init(alloc: Allocator, io: std.Io, initial_cols: u16, initial_rows: u16, 
     self.input_write_event = c.CreateEventW(null, c.TRUE, c.FALSE, null);
     if (self.input_write_event == null) return error.CreateEventFailed;
 
-    try createConPty(&self, io, initial_rows, initial_cols);
+    try createConPty(&self, io, size.rows, size.cols);
     try spawnChild(&self, params);
 
     return self;
@@ -393,11 +393,11 @@ pub fn write(
     }
 }
 
-pub fn resize(self: *Self, cols: u16, rows: u16) !void {
+pub fn resize(self: *Self, ws: backend_types.WinSize) !void {
     const hpc = self.hpc orelse return;
     const size = c.COORD{
-        .X = @intCast(cols),
-        .Y = @intCast(rows),
+        .X = @intCast(ws.cols),
+        .Y = @intCast(ws.rows),
     };
     if (resize_pseudo_console.?(hpc, size) < 0) return error.PtyResizeFailed;
 }

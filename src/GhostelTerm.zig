@@ -16,6 +16,7 @@ const utils = @import("utils.zig");
 const parseHexColor = utils.parseHexColor;
 const platform = @import("platform.zig");
 const NativeProcess = @import("NativeProcess.zig");
+const WinSize = @import("backend_types.zig").WinSize;
 const ChannelFd = NativeProcess.ChannelFd;
 const ProcessParams = NativeProcess.ProcessParams;
 const ProcessPid = i64;
@@ -31,6 +32,8 @@ stream: gt.Stream(GhostelHandler(*Self)),
 string_buffer: ?[]u8 = null,
 renderer: Renderer,
 process: ?*NativeProcess = null,
+/// Last window size sent to the PTY.
+pty_size: WinSize = .{ .cols = 0, .rows = 0 },
 /// Light/dark as classified by Emacs for `ghostel-default`; reported via CSI 996/997.
 color_scheme: gt.device_status.ColorScheme = .dark,
 
@@ -90,19 +93,31 @@ pub fn redraw(self: *Self, force_full: bool, force_sync: bool) !bool {
 
     _ = env.f("ghostel--kitty-clear", .{});
     try kitty_graphics.emitPlacements(env, self);
-    const post_size = .{ self.terminal.cols, self.terminal.rows };
 
-    if (!std.meta.eql(pre_size, post_size)) {
-        if (self.process) |proc| {
-            try proc.resizePty(post_size[0], post_size[1]);
-        } else {
-            const process = env.symbolValue("ghostel--process");
-            if (env.isNotNil(process)) {
-                _ = env.f("set-process-window-size", .{ process, post_size[1], post_size[0] });
-            }
+    if (self.process) |proc| {
+        const size = self.winSize();
+        if (!std.meta.eql(size, self.pty_size)) {
+            try proc.resizePty(size);
+            self.pty_size = size;
+        }
+    } else if (!std.meta.eql(pre_size, .{ self.terminal.cols, self.terminal.rows })) {
+        // Emacs-owned PTYs carry no pixel geometry.
+        const process = env.symbolValue("ghostel--process");
+        if (env.isNotNil(process)) {
+            _ = env.f("set-process-window-size", .{ process, self.terminal.rows, self.terminal.cols });
         }
     }
     return true;
+}
+
+/// Window size for the PTY.  The terminal must be locked.
+fn winSize(self: *Self) WinSize {
+    return .{
+        .cols = self.terminal.cols,
+        .rows = self.terminal.rows,
+        .xpixel = std.math.lossyCast(u16, self.terminal.width_px),
+        .ypixel = std.math.lossyCast(u16, self.terminal.height_px),
+    };
 }
 
 /// Set the color palette (256 entries). The terminal must be locked.
@@ -275,7 +290,7 @@ pub fn spawnNativeProcess(
     const initial_size = blk: {
         try self.lock();
         defer self.unlock();
-        break :blk .{ self.terminal.cols, self.terminal.rows };
+        break :blk self.winSize();
     };
 
     const process = try self.alloc.create(NativeProcess);
@@ -283,13 +298,13 @@ pub fn spawnNativeProcess(
     try process.init(
         self.alloc,
         self.io,
-        initial_size[0],
-        initial_size[1],
+        initial_size,
         ProcessParams{ .file = command[0], .args = command, .env = env, .cwd = cwd },
         self,
         event_fd,
     );
     self.process = process;
+    self.pty_size = initial_size;
     return process.pidValue();
 }
 

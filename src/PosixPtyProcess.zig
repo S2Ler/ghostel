@@ -63,8 +63,13 @@ const Pty = struct {
         return self;
     }
 
-    pub fn resize(self: *@This(), cols: u16, rows: u16) !void {
-        const size = c.winsize{ .ws_col = cols, .ws_row = rows, .ws_xpixel = 0, .ws_ypixel = 0 };
+    pub fn resize(self: *@This(), ws: backend_types.WinSize) !void {
+        const size = c.winsize{
+            .ws_col = ws.cols,
+            .ws_row = ws.rows,
+            .ws_xpixel = ws.xpixel,
+            .ws_ypixel = ws.ypixel,
+        };
         switch (sys.errno(c.ioctl(self.primary_fd, c.TIOCSWINSZ, &size))) {
             .SUCCESS, .IO, .NXIO => {},
             else => return error.PtyResizeFailed,
@@ -190,10 +195,10 @@ fn failChild(msg: []const u8, err: []const u8) noreturn {
     std.c._exit(1);
 }
 
-pub fn init(alloc: Allocator, _: std.Io, initial_cols: u16, initial_rows: u16, params: backend_types.ProcessParams) !Self {
+pub fn init(alloc: Allocator, _: std.Io, size: backend_types.WinSize, params: backend_types.ProcessParams) !Self {
     var self = Self{ .pty = try .init() };
     errdefer self.pty.deinit();
-    try self.pty.resize(initial_cols, initial_rows);
+    try self.pty.resize(size);
 
     var arena_allocator = std.heap.ArenaAllocator.init(alloc);
     defer arena_allocator.deinit();
@@ -254,8 +259,8 @@ pub fn pidValue(self: *const Self) i64 {
     return @intCast(self.pid);
 }
 
-pub fn resize(self: *Self, cols: u16, rows: u16) !void {
-    try self.pty.resize(cols, rows);
+pub fn resize(self: *Self, size: backend_types.WinSize) !void {
+    try self.pty.resize(size);
 }
 
 pub fn write(
