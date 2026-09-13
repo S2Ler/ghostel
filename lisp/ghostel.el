@@ -421,7 +421,7 @@ nil annotates with the full title."
   :type 'boolean)
 
 (defcustom ghostel-query-before-killing 'auto
-  "Whether to confirm before killing a live ghostel buffer or exiting Emacs.
+  "Confirm before killing a live ghostel buffer or on `save-buffers-kill-emacs'.
 
 t      Always query while the terminal process is alive.
 nil    Never query.
@@ -4926,16 +4926,29 @@ leaving the input.  See `ghostel-point-leave-input-mode'."
                      (with-current-buffer origin
                        (ghostel-maybe-leave-input)))))))
 
+(defun ghostel--query-before-killing-p ()
+  "Return non-nil when `ghostel-query-before-killing' wants confirmation."
+  (and (process-live-p ghostel--process)
+       (or (eq ghostel-query-before-killing t)
+           (and (eq ghostel-query-before-killing 'auto) ghostel--command-running))))
+
 (defun ghostel--kill-buffer-query ()
-  "Return non-nil when the current ghostel buffer may be killed.
-Honors `ghostel-query-before-killing' and `ghostel--command-running'
-for both native and Emacs PTY paths."
-  (or (not (process-live-p ghostel--process))
-      (pcase `(,ghostel-query-before-killing . ,ghostel--command-running)
-        ((or `(t . ,_) `(auto . t))
-         (yes-or-no-p (format "Buffer %S has a running process; kill it? "
-                              (buffer-name (current-buffer)))))
-        (_ t))))
+  "Return non-nil when the current ghostel buffer may be killed."
+  (or (not (ghostel--query-before-killing-p))
+      (yes-or-no-p (format "Buffer %S has a running process; kill it? "
+                           (buffer-name (current-buffer))))))
+
+(defun ghostel--kill-emacs-query ()
+  "Return non-nil when no ghostel buffer objects to Emacs exiting."
+  (let ((names (mapcan (lambda (b)
+                         (and (with-current-buffer b (ghostel--query-before-killing-p))
+                              (list (buffer-name b))))
+                       (ghostel-buffer-list))))
+    (or (null names)
+        (yes-or-no-p (format "Ghostel buffers with running processes (%s); exit anyway? "
+                             (string-join names ", "))))))
+
+(add-hook 'kill-emacs-query-functions #'ghostel--kill-emacs-query)
 
 
 ;;; Major mode

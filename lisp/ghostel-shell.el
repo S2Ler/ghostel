@@ -560,7 +560,9 @@ not here.  This handler only tracks prompt positions and exit status."
      ;; prompt-start marker (no fresh-line side effect); both mark
      ;; a navigable prompt position.
      (push (cons (count-lines (point-min) (point-max)) nil)
-           ghostel--prompt-positions))
+           ghostel--prompt-positions)
+     ;; No D arrives for a command that replaced the shell (exec zsh).
+     (setq ghostel--command-running nil))
     ("C"
      ;; Command output start — notify `ghostel-command-start-functions'.
      (ghostel--run-hook-safely 'ghostel-command-start-functions

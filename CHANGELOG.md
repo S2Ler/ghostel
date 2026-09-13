@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- `ghostel-query-before-killing` also confirms on `save-buffers-kill-emacs`
+  (`C-x C-c`): one prompt listing every ghostel buffer with a running command
+  (`auto`, needs OSC 133 shell integration) or a live process (`t`).
+
+### Fixed
+- `ghostel-query-before-killing` set to `auto` no longer stays armed at
+  an idle prompt after a command that never reports completion, such
+  as `exec zsh`.
+
 ## [0.53.0] — 2026-09-02
 
 ### Added

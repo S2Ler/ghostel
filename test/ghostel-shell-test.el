@@ -1978,6 +1978,49 @@ stubbing `active-minibuffer-window' / `window-buffer' to return it."
                   (lambda (_) (ert-fail "unexpected prompt"))))
          (should (ghostel--kill-buffer-query)))))))
 
+(ert-deftest ghostel-test-query-before-exit-names-only-running-buffers ()
+  "The exit query, run outside ghostel, names only buffers with a running command."
+  (ghostel-test--with-cat-process
+   running
+   (ghostel-test--with-cat-process
+    idle
+    (dolist (proc (list running idle))
+      (with-current-buffer (process-buffer proc)
+        (setq major-mode 'ghostel-mode
+              ghostel--process proc
+              ghostel--command-running (eq proc running))))
+    (let ((ghostel-query-before-killing 'auto)
+          asked)
+      (cl-letf (((symbol-function 'yes-or-no-p)
+                 (lambda (prompt) (setq asked prompt) nil)))
+        (with-temp-buffer
+          (should-not (ghostel--kill-emacs-query))
+          (should (string-search (buffer-name (process-buffer running)) asked))
+          (should-not (string-search (buffer-name (process-buffer idle)) asked))))))))
+
+(ert-deftest ghostel-test-query-before-exit-silent-at-prompt ()
+  "Exiting Emacs does not ask when every ghostel buffer sits at a prompt."
+  (ghostel-test--with-cat-process
+   proc
+   (with-current-buffer (process-buffer proc)
+     (setq major-mode 'ghostel-mode
+           ghostel--process proc))
+   (let ((ghostel-query-before-killing 'auto))
+     (cl-letf (((symbol-function 'yes-or-no-p)
+                (lambda (_) (ert-fail "unexpected prompt"))))
+       (should (ghostel--kill-emacs-query))))))
+
+(ert-deftest ghostel-test-osc133-prompt-clears-command-running ()
+  "A prompt marker ends a command that never reported completion."
+  (with-temp-buffer
+    (setq ghostel--command-running t)
+    (ghostel--osc133-marker "A" nil)
+    (should-not ghostel--command-running)))
+
+(ert-deftest ghostel-test-query-before-exit-hook-installed ()
+  "The exit query is registered on `kill-emacs-query-functions'."
+  (should (memq #'ghostel--kill-emacs-query kill-emacs-query-functions)))
+
 (ert-deftest ghostel-test-prompt-navigation ()
   "Test next/previous prompt navigation.
 Mirrors the renderer's two-property layout: `ghostel-prompt' on the
