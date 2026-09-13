@@ -1016,6 +1016,13 @@ scoped listings match subsets with `ghostel-identity-match-p'.")
   "Non-nil when ghostel's scroll-event intercept is active.
 Used as the activation key in `emulation-mode-map-alists'.")
 
+(defvar-local ghostel--top-pad-overlay nil
+  "Empty overlay at `point-min' whose `before-string' pads above the first row.
+See `ghostel-window-padding-balance'.")
+
+(defvar-local ghostel--top-pad 0
+  "Pixels `ghostel--top-pad-overlay' currently adds above the first row.")
+
 (defvar-local ghostel--spinner-active nil
   "Non-nil when this buffer has a spinner started by `ghostel-spinner-progress'.
 The spinner object itself lives in spinner.el's buffer-local
@@ -2007,6 +2014,21 @@ Installed by `ghostel--mouse-begin-drag-tracking'; routes
 `mouse-movement' events to `ghostel--mouse-drag-motion' so the
 running program receives a live motion stream during the drag.")
 
+(defun ghostel--posn-cell (posn)
+  "Return (COL . ROW) of POSN in the terminal grid of its window.
+Unlike `posn-col-row', honors buffer-local text scaling, `line-spacing',
+and the vscroll or pad above the first row."
+  (let ((xy (posn-x-y posn))
+        (win (posn-window posn)))
+    (with-selected-window (if (framep win) (frame-selected-window win) win)
+      (let* ((lh (default-line-height))
+             (vscroll (window-vscroll nil t))
+             (top (cond ((> vscroll 0) (- lh vscroll))
+                        ((= (window-start) (point-min)) ghostel--top-pad)
+                        (t 0))))
+        (cons (/ (car xy) (default-font-width))
+              (/ (- (cdr xy) top) lh))))))
+
 (defun ghostel--mouse-button-number (event)
   "Return the ghostty mouse button number for EVENT."
   (pcase (event-basic-type event)
@@ -2041,7 +2063,7 @@ A mouse-wheel notch is never fewer than one press."
   (when (and event (ghostel--terminal-input-mode-p)
              (ghostel--mouse-tracking-p ghostel--term))
     (let* ((posn (event-start event))
-           (col-row (posn-col-row posn))
+           (col-row (ghostel--posn-cell posn))
            (delta (cdr (nth 4 event)))
            (presses 1))
       (when (and delta (not mwheel-coalesce-scroll-events)
@@ -2074,7 +2096,7 @@ Return non-nil when the event was encoded and sent to the terminal."
   (when (ghostel--terminal-input-mode-p)
     (select-window (posn-window (event-start event)))
     (let* ((posn (event-start event))
-           (col-row (posn-col-row posn))
+           (col-row (ghostel--posn-cell posn))
            (col (car col-row))
            (row (cdr col-row))
            (sent (ghostel--mouse-event ghostel--term
@@ -2120,7 +2142,7 @@ within the same cell so the PTY is not flooded with redundant motion."
   (interactive "e")
   (when ghostel--mouse-drag-button
     (let* ((posn (event-start event))
-           (col-row (posn-col-row posn))
+           (col-row (ghostel--posn-cell posn))
            (col (car col-row))
            (row (cdr col-row)))
       (unless (equal (cons row col) ghostel--mouse-drag-last-cell)
@@ -2138,7 +2160,7 @@ Return non-nil when the event was encoded and sent to the terminal."
   (when (or ghostel--mouse-drag-button
             (ghostel--terminal-input-mode-p))
     (let* ((posn (event-end event))
-           (col-row (posn-col-row posn))
+           (col-row (ghostel--posn-cell posn))
            (col (car col-row))
            (row (cdr col-row)))
       (ghostel--mouse-event ghostel--term
@@ -2159,7 +2181,7 @@ Return non-nil when the event was encoded and sent to the terminal."
   (when (or ghostel--mouse-drag-button
             (ghostel--terminal-input-mode-p))
     (let* ((posn (event-end event))
-           (col-row (posn-col-row posn))
+           (col-row (ghostel--posn-cell posn))
            (col (car col-row))
            (row (cdr col-row)))
       (ghostel--mouse-event ghostel--term
@@ -4484,13 +4506,6 @@ the bottom of WINDOW.  HEIGHT is the pixel height of START..TARGET."
                      window (cons target (- body-height)) target nil nil))
               (start (nth 2 size)))
     (list start (max 0 (- (nth 1 size) body-height)) (nth 1 size))))
-
-(defvar-local ghostel--top-pad-overlay nil
-  "Empty overlay at `point-min' whose `before-string' pads above the first row.
-See `ghostel-window-padding-balance'.")
-
-(defvar-local ghostel--top-pad 0
-  "Pixels `ghostel--top-pad-overlay' currently adds above the first row.")
 
 (defun ghostel--top-pad-set (pad)
   "Pad PAD pixels above the first row; 0 removes the pad.

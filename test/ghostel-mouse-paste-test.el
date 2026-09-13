@@ -353,6 +353,34 @@ never fewer than one press."
                        ghostel--scroll-pending))
           (kill-local-variable var))))))
 
+(ert-deftest ghostel-test-posn-cell-uses-event-window-metrics ()
+  "Cells are measured in the event window's buffer, below any top sliver or pad."
+  (with-temp-buffer
+    (let ((buf (current-buffer))
+          (vscroll 0))
+      (save-window-excursion
+        (let ((win (split-window)))
+          (set-window-buffer win buf)
+          (cl-letf (((symbol-function 'default-font-width)
+                     (lambda () (if (eq (current-buffer) buf) 14 7)))
+                    ((symbol-function 'default-line-height)
+                     (lambda () (if (eq (current-buffer) buf) 28 14)))
+                    ((symbol-function 'window-vscroll)
+                     (lambda (&rest _) vscroll)))
+            (should (equal '(5 . 3)
+                           (with-temp-buffer
+                             (ghostel--posn-cell `(,win 1 (70 . 84) 0)))))
+            ;; A position on the frame resolves through its selected window.
+            (should (equal '(10 . 6)
+                           (ghostel--posn-cell `(,(selected-frame) nil (70 . 84) 0))))
+            ;; 18 px of a 28 px row scrolled off: a 10 px sliver above row 0.
+            (setq vscroll 18)
+            (should (equal 2 (cdr (ghostel--posn-cell `(,win 1 (0 . 93) 0)))))
+            ;; Same geometry from a top pad.
+            (setq vscroll 0)
+            (setq-local ghostel--top-pad 10)
+            (should (equal 2 (cdr (ghostel--posn-cell `(,win 1 (0 . 93) 0)))))))))))
+
 (ert-deftest ghostel-test-scroll-intercept-frame-posn ()
   "A wheel event positioned on the frame re-dispatches instead of erroring."
   (let ((fake-event `(wheel-up (,(selected-frame) nil (10 . 5) 0) 1 0 (0.0 . 8.0)))
