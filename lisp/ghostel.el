@@ -3292,6 +3292,21 @@ TITLE falls back to that buffer's name."
         (alert body :title summary)
       (message "%s: %s" summary body))))
 
+(defun ghostel-tty-forward-notify (title body)
+  "Forward OSC 9 / OSC 777 notifications to the outer terminal.
+On a tty frame, re-emit TITLE and BODY as OSC 9 (empty TITLE) or
+OSC 777 to the frame showing this buffer, else the selected frame.
+On a GUI frame, fall back to `ghostel-default-notify'.
+Use as `ghostel-notification-function'."
+  (let ((frame (window-frame (get-buffer-window nil t))))
+    (if (tty-type frame)
+        (send-string-to-terminal
+         (if (string-empty-p title)
+             (format "\e]9;%s\e\\" body)
+           (format "\e]777;notify;%s;%s\e\\" title body))
+         frame)
+      (ghostel-default-notify title body))))
+
 (defun ghostel-default-progress (state progress)
   "Default handler for OSC 9;4 ConEmu progress reports.
 Shows STATE and PROGRESS in `mode-line-process'.  STATE is one of

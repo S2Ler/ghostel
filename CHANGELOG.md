@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- `ghostel-tty-forward-notify`: a `ghostel-notification-function` that
+  re-emits OSC 9 / OSC 777 notifications to the outer terminal on tty
+  frames, so a remote Emacs over ssh notifies the local desktop.
+  Fixes [#679](https://github.com/dakra/ghostel/issues/679).
 - `ghostel-query-before-killing` also confirms on `save-buffers-kill-emacs`
   (`C-x C-c`): one prompt listing every ghostel buffer with a running command
   (`auto`, needs OSC 133 shell integration) or a live process (`t`).

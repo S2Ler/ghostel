@@ -996,6 +996,16 @@ A custom handler receives the title and body and can route them anywhere:
         (alert body :title (or title "ghostel") :category 'ghostel)))
 #+end_src
 
+In a terminal Emacs (=emacs -nw=, =emacsclient -t=), =ghostel-tty-forward-notify=
+re-emits the notification as OSC 9 / OSC 777 to the outer terminal, so a remote
+Emacs over ssh shows the notification on your local desktop.  GUI frames fall
+back to =ghostel-default-notify=.  tmux or screen in between drop it; this
+handler emits no passthrough wrapper.
+
+#+begin_src emacs-lisp
+(setq ghostel-notification-function #'ghostel-tty-forward-notify)
+#+end_src
+
 ConEmu's *OSC 9;4* progress protocol is also recognised: build tools, AI agents
 like Claude Code, and other long-running commands emit it to report completion
 percentage.  Ghostel dispatches these to =ghostel-progress-function= with =(STATE

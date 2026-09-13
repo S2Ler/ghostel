@@ -1199,5 +1199,18 @@ Downstream consumers (notably `ghostel-compile') depend on it."
       (ghostel--osc133-marker "C" nil)
       (should ran))))
 
+(ert-deftest ghostel-test-tty-forward-notify ()
+  "`ghostel-tty-forward-notify' re-emits OSC 9 / OSC 777 on a tty frame."
+  (let (sent)
+    (cl-letf (((symbol-function 'tty-type) (lambda (&optional _) "xterm"))
+              ((symbol-function 'send-string-to-terminal)
+               (lambda (string &optional terminal)
+                 (push (cons string terminal) sent))))
+      (ghostel-tty-forward-notify "" "Hello world")
+      (ghostel-tty-forward-notify "Subject" "Body text")
+      (should (equal `(("\e]777;notify;Subject;Body text\e\\" . ,(selected-frame))
+                       ("\e]9;Hello world\e\\" . ,(selected-frame)))
+                     sent)))))
+
 (provide 'ghostel-osc-test)
 ;;; ghostel-osc-test.el ends here
