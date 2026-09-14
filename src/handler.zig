@@ -67,10 +67,8 @@ pub fn GhostelHandler(Effects: type) type {
                     self.handleSemanticPrompt(value);
                 },
 
-                // For these, the standard handler is a no-op (see
-                // `stream_terminal.zig` — they are listed in the "no
-                // terminal-modifying effect" arm), so we handle them
-                // entirely here.
+                // Routed to Elisp instead of the standard handler's
+                // pwd tracking, clipboard effects and progress effect.
                 .report_pwd => self.handleReportPwd(value),
                 .clipboard_contents => self.handleClipboardContents(value),
                 .show_desktop_notification => self.handleNotification(value),
@@ -95,7 +93,7 @@ pub fn GhostelHandler(Effects: type) type {
         }
 
         /// Called when the terminal needs to write response data back to the PTY.
-        fn writePtyCallback(handler: *gt.TerminalStream.Handler, data: [:0]const u8) void {
+        fn writePtyCallback(handler: *gt.TerminalStream.Handler, data: []const u8) void {
             const self: *Self = @fieldParentPtr("inner", handler);
             if (data.len == 0) return;
             self.effects.ptyWriteFromTerminal(data);

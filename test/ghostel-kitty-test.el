@@ -116,7 +116,7 @@ The display property and the marker share the same range."
   (ghostel-test--kitty-fixture
    (lambda ()
 	 (insert "row1xx\nrow2xx\n")
-	 (ghostel--kitty-display-image "data" nil 0 0 4 2 32 32 0 0 0 0)
+	 (ghostel--kitty-display-image "data" 0 0 4 2 32 32 0 0 0 0)
 	 ;; Both rows should have a display property covering them
 	 (should (get-text-property 1 'display))
 	 (should (get-text-property 1 'ghostel-kitty))
@@ -138,7 +138,7 @@ tiles them at the wrong scale once the `default' face is remapped."
                 ((symbol-function 'default-font-width) (lambda () 8))
                 ((symbol-function 'default-font-height) (lambda () 16)))
         (insert "row1xx\nrow2xx\n")
-        (ghostel--kitty-display-image "data" nil 0 0 4 2 32 32 0 0 0 0)
+        (ghostel--kitty-display-image "data" 0 0 4 2 32 32 0 0 0 0)
         (let ((props (nthcdr 3 image-args)))
           (should (= (plist-get props :width) 32))    ; 4 cols * 8
           (should (= (plist-get props :height) 32)))  ; 2 rows * 16
@@ -151,7 +151,7 @@ tiles them at the wrong scale once the `default' face is remapped."
   (ghostel-test--kitty-fixture
    (lambda ()
 	 (insert "\n\n")
-	 (ghostel--kitty-display-image "data" nil 0 5 4 1 32 16 0 0 0 0)
+	 (ghostel--kitty-display-image "data" 0 5 4 1 32 16 0 0 0 0)
 	 (let ((ovs (cl-remove-if-not
 				 (lambda (ov) (overlay-get ov 'ghostel-kitty))
 				 (overlays-in (point-min) (point-max)))))
@@ -168,7 +168,7 @@ must survive a clear."
 	 ;; Apply an unrelated display property (e.g. wide-char comp).
 	 (put-text-property 1 3 'display "PRESERVED")
 	 ;; Apply kitty image.
-	 (ghostel--kitty-display-image "data" nil 0 3 3 2 24 32 0 0 0 0)
+	 (ghostel--kitty-display-image "data" 0 3 3 2 24 32 0 0 0 0)
 	 (should ghostel--kitty-active)
 	 (ghostel--kitty-clear)
 	 ;; Unrelated display survives.
@@ -380,7 +380,7 @@ overlays per row by the number of times the image has been visible."
 	 ;; Re-emit the same placement (image now spans scrollback + viewport).
 	 ;; abs-row=0 means image starts at line 1, grid-rows=4 means it
 	 ;; covers lines 1..4 — all of which are in scrollback.
-	 (ghostel--kitty-display-image "data" nil 0 0 4 4 32 64 0 0 0 0)
+	 (ghostel--kitty-display-image "data" 0 0 4 4 32 64 0 0 0 0)
 	 ;; Each scrollback row should still have exactly ONE overlay (the
 	 ;; pre-existing one from the earlier emit).
 	 (save-excursion
@@ -400,7 +400,7 @@ overlays per row by the number of times the image has been visible."
    (lambda ()
 	 (let ((ph (string #x10EEEE)))
 	   (insert ph ph ph "\n" ph ph ph "\n"))
-	 (ghostel--kitty-display-virtual "data" nil)
+	 (ghostel--kitty-display-virtual "data")
 	 (should ghostel--kitty-active)
 	 (should (get-text-property 1 'display))
 	 (should (get-text-property 1 'ghostel-kitty))
@@ -416,7 +416,7 @@ The error survives past the redraw — not just flashed via `message'."
      (cl-letf (((symbol-function 'create-image)
                 (lambda (&rest _) (error "Boom"))))
        (insert "row\n")
-       (ghostel--kitty-display-image "data" nil 0 0 1 1 8 16 0 0 0 0)
+       (ghostel--kitty-display-image "data" 0 0 1 1 8 16 0 0 0 0)
        (should ghostel--kitty-last-error)
        (should (eq (car ghostel--kitty-last-error) 'error))))))
 
@@ -428,7 +428,7 @@ should fail visibly."
    (lambda ()
 	 (insert "row1xx\nrow2xx\n")
 	 ;; src-w=16 != pixel-w=32 → atlas-style sub-rect.
-	 (ghostel--kitty-display-image "data" nil 0 0 4 2 32 32 0 0 16 32)
+	 (ghostel--kitty-display-image "data" 0 0 4 2 32 32 0 0 16 32)
 	 (should ghostel--kitty-last-error)
 	 ;; The signaled symbol appears in the err data.
 	 (should (memq 'ghostel-kitty-unsupported-source-rect
@@ -443,7 +443,7 @@ would write properties to the previous line."
    (lambda ()
 	 (insert "abcdefghij\nabcdefghij\n")
 	 ;; vp-col = -2: 2 columns scrolled off, 2 visible (g-cols=4).
-	 (ghostel--kitty-display-image "data" nil 0 -2 4 1 32 16 0 0 0 0)
+	 (ghostel--kitty-display-image "data" 0 -2 4 1 32 16 0 0 0 0)
 	 (should ghostel--kitty-active)
 	 (should-not ghostel--kitty-last-error)
 	 ;; Display property should land at column 0..2 of the placement
@@ -456,7 +456,7 @@ would write properties to the previous line."
    (lambda ()
 	 (insert "abc\nabc\n")
 	 ;; g-cols=4, vp-col=-5 → start-col=5 > g-cols → visible-cols=0.
-	 (ghostel--kitty-display-image "data" nil 0 -5 4 1 32 16 0 0 0 0)
+	 (ghostel--kitty-display-image "data" 0 -5 4 1 32 16 0 0 0 0)
 	 (should-not ghostel--kitty-active)
 	 (should-not ghostel--kitty-last-error))))
 
@@ -493,19 +493,18 @@ now we verify only the arguments the native module hands off."
 			  (ghostel--redraw term t))
 			(should calls)
 			(let ((args (car calls)))
-			  ;; (data is-png abs-row vp-col grid-cols grid-rows
+			  ;; (data abs-row vp-col grid-cols grid-rows
 			  ;;  pixel-w pixel-h src-x src-y src-w src-h)
 			  (should (stringp (nth 0 args)))
 			  ;; PPM header starts with "P6" — we converted RGB→PPM in
 			  ;; the Zig layer.
 			  (should (string-prefix-p "P6" (nth 0 args)))
-			  (should (eq (nth 1 args) nil))               ; is-png = nil (PPM)
-			  (should (integerp (nth 2 args)))             ; abs-row
-			  (should (integerp (nth 3 args)))             ; vp-col
-			  (should (= (nth 4 args) 2))                  ; grid-cols
-			  (should (= (nth 5 args) 2))                  ; grid-rows
-			  (should (= (nth 6 args) 2))                  ; pixel-w
-			  (should (= (nth 7 args) 2)))))               ; pixel-h
+			  (should (integerp (nth 1 args)))             ; abs-row
+			  (should (integerp (nth 2 args)))             ; vp-col
+			  (should (= (nth 3 args) 2))                  ; grid-cols
+			  (should (= (nth 4 args) 2))                  ; grid-rows
+			  (should (= (nth 5 args) 2))                  ; pixel-w
+			  (should (= (nth 6 args) 2)))))               ; pixel-h
 	  (kill-buffer buf))))
 
 (provide 'ghostel-kitty-test)

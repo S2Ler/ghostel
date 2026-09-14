@@ -68,7 +68,7 @@ pub fn init(
     var event_writer = try EventWriter.init(event_fd);
     errdefer event_writer.close();
 
-    var stream: @TypeOf(self.stream) = .initAlloc(alloc, .init(alloc, owner, self));
+    var stream: @TypeOf(self.stream) = .init(.{ .allocator = alloc, .handler = .init(alloc, owner, self) });
     errdefer stream.deinit();
 
     const replica_name = try alloc.dupeZ(u8, backend.replicaName());

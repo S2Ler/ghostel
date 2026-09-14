@@ -61,7 +61,7 @@ pub fn init(
     };
     errdefer term.terminal.deinit(alloc);
 
-    term.stream = .initAlloc(alloc, .init(alloc, term, term));
+    term.stream = .init(.{ .allocator = alloc, .handler = .init(alloc, term, term) });
     errdefer term.stream.deinit();
 
     term.renderer = try .init(alloc, env, &term.terminal);
@@ -121,8 +121,8 @@ fn winSize(self: *Self) WinSize {
 }
 
 /// Set the color palette (256 entries). The terminal must be locked.
-fn setColorPaletteLocked(self: *Self, palette: gt.color.Palette) void {
-    self.terminal.colors.palette.changeDefault(palette);
+fn setColorPaletteLocked(self: *Self, palette: gt.color.Palette) !void {
+    try self.terminal.colors.palette.changeDefault(self.alloc, palette);
     self.terminal.flags.dirty.palette = true;
 }
 
@@ -427,7 +427,7 @@ pub const emacs_functions = [_]emacs.FunctionEntry{
                         return error.OutOfRange;
                     },
 
-                    .max_scrollback = if (nargs > 2 and env.isNotNil(args[2]))
+                    .max_scrollback_bytes = if (nargs > 2 and env.isNotNil(args[2]))
                         (std.math.cast(usize, env.cast(i64, args[2])) orelse {
                             return error.OutOfRange;
                         })
@@ -671,7 +671,7 @@ pub const emacs_functions = [_]emacs.FunctionEntry{
                     const pos = idx * 7;
                     palette[idx] = try gt.color.RGB.parse(colors_str[pos .. pos + 7]);
                 }
-                term.setColorPaletteLocked(palette);
+                try term.setColorPaletteLocked(palette);
                 return env.t();
             }
         },

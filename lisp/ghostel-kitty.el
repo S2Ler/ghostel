@@ -138,12 +138,11 @@ the buffer line is long enough to hold the placement's column range."
                            (list 'line-height ch 'ghostel-kitty t)))
     (setq ghostel--kitty-active t)))
 
-(defun ghostel--kitty-display-image (data is-png abs-row vp-col grid-cols grid-rows pixel-w pixel-h
+(defun ghostel--kitty-display-image (data abs-row vp-col grid-cols grid-rows pixel-w pixel-h
                                           src-x src-y src-w src-h)
   "Display a kitty graphics image placement in the buffer.
 Called from the native module during redraw for each visible placement.
-DATA is a unibyte string (PNG or PPM).
-IS-PNG is non-nil for PNG, nil for PPM.
+DATA is a unibyte PPM string.
 ABS-ROW is the absolute buffer row (0-indexed from `point-min'),
 already accounting for materialized scrollback (the C side adds
 `scrollback_in_buffer' to libghostty's viewport-relative row before
@@ -181,7 +180,7 @@ user shouldn't have to trigger one)."
                            (max 1 (/ (+ pixel-w cw -1) cw))))
                  (g-rows (if (> grid-rows 0) grid-rows
                            (max 1 (/ (+ pixel-h ch -1) ch))))
-                 (img (create-image data (if is-png 'png 'pbm) t
+                 (img (create-image data 'pbm t
                                     :width (* g-cols cw)
                                     :height (* g-rows ch)
                                     :scale 1
@@ -221,11 +220,11 @@ user shouldn't have to trigger one)."
        (setq ghostel--kitty-last-error err)
        (message "ghostel: kitty image error: %S" err)))))
 
-(defun ghostel--kitty-display-virtual (data is-png)
+(defun ghostel--kitty-display-virtual (data)
   "Display a virtual kitty graphics placement (unicode placeholders).
 Searches the buffer for U+10EEEE placeholder characters and overlays
 per-row image slices on the placeholder regions of each line.
-DATA is a unibyte string (PNG or PPM).  IS-PNG is non-nil for PNG."
+DATA is a unibyte PPM string."
   (when (display-graphic-p)
     (condition-case err
         (let ((placeholder (string #x10EEEE))
@@ -260,7 +259,7 @@ DATA is a unibyte string (PNG or PPM).  IS-PNG is non-nil for PNG."
             ;; tiles flush with adjacent slices regardless of the line's
             ;; baseline (the default `:ascent 50' splits the slice across
             ;; the baseline, leaving visible offsets between rows).
-            (setq img (create-image data (if is-png 'png 'pbm) t
+            (setq img (create-image data 'pbm t
                                     :width (* grid-cols cw)
                                     :height (* grid-rows ch)
                                     :scale 1
