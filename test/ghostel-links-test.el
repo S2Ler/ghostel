@@ -260,6 +260,15 @@ E.g. `compilation-mode' error loci in `ghostel-compile-view-mode'."
       (ghostel--detect-urls))
     (should (equal "https://example.com/path"              ; url strips trailing dot
                    (get-text-property 5 'help-echo))))
+  ;; A path ending a sentence is matched without the trailing mark.
+  (let ((test-file (locate-library "ghostel")))
+    (dolist (mark '("." "," ";" "!" "?"))
+      (with-temp-buffer
+        (insert (format "Written to %s%s\n" test-file mark))
+        (let ((ghostel-enable-url-detection t))
+          (ghostel--detect-urls))
+        (should (equal (concat "fileref:" test-file)
+                       (get-text-property 12 'help-echo))))))
   ;; File:line detection with an existing relative path.
   (let* ((test-file (locate-library "ghostel"))
          (display-file (concat "./" (file-name-nondirectory test-file))))
