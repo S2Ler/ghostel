@@ -9,12 +9,14 @@ const emacs = @import("emacs.zig");
 const gt = @import("ghostty-vt");
 const GhostelHandler = @import("handler.zig").GhostelHandler;
 const Renderer = @import("Renderer.zig");
+const RecursiveMutex = @import("RecursiveMutex.zig");
 const input = @import("input.zig");
 const kitty_graphics = @import("kitty_graphics.zig");
 const utils = @import("utils.zig");
 const parseHexColor = utils.parseHexColor;
 const platform = @import("platform.zig");
 const NativeProcess = @import("NativeProcess.zig");
+const WinSize = @import("backend_types.zig").WinSize;
 const ChannelFd = NativeProcess.ChannelFd;
 const ProcessParams = NativeProcess.ProcessParams;
 const ProcessPid = i64;
@@ -24,11 +26,16 @@ const Self = @This();
 
 alloc: Allocator,
 io: std.Io,
+mutex: RecursiveMutex = .{},
 terminal: gt.Terminal,
 stream: gt.Stream(GhostelHandler(*Self)),
 string_buffer: ?[]u8 = null,
 renderer: Renderer,
 process: ?*NativeProcess = null,
+/// Last window size sent to the PTY.
+pty_size: WinSize = .{ .cols = 0, .rows = 0 },
+/// Light/dark as classified by Emacs for `ghostel-default`; reported via CSI 996/997.
+color_scheme: gt.device_status.ColorScheme = .dark,
 
 /// Create a new terminal with the given dimensions and scrollback.
 pub fn init(
@@ -54,7 +61,7 @@ pub fn init(
     };
     errdefer term.terminal.deinit(alloc);
 
-    term.stream = .initAlloc(alloc, .init(term, &term.terminal));
+    term.stream = .initAlloc(alloc, .init(alloc, term, term));
     errdefer term.stream.deinit();
 
     term.renderer = try .init(alloc, env, &term.terminal);
@@ -77,8 +84,8 @@ pub fn deinit(self: *Self) void {
 }
 
 pub fn redraw(self: *Self, force_full: bool, force_sync: bool) !bool {
-    try self.lockTerm();
-    defer self.unlockTerm();
+    try self.lock();
+    defer self.unlock();
 
     const env = emacs.current_env orelse return false;
     const pre_size = .{ self.terminal.cols, self.terminal.rows };
@@ -86,31 +93,43 @@ pub fn redraw(self: *Self, force_full: bool, force_sync: bool) !bool {
 
     _ = env.f("ghostel--kitty-clear", .{});
     try kitty_graphics.emitPlacements(env, self);
-    const post_size = .{ self.terminal.cols, self.terminal.rows };
 
-    if (!std.meta.eql(pre_size, post_size)) {
-        if (self.process) |proc| {
-            try proc.resizePty(post_size[0], post_size[1]);
-        } else {
-            const process = env.symbolValue("ghostel--process");
-            if (env.isNotNil(process)) {
-                _ = env.f("set-process-window-size", .{ process, post_size[1], post_size[0] });
-            }
+    if (self.process) |proc| {
+        const size = self.winSize();
+        if (!std.meta.eql(size, self.pty_size)) {
+            try proc.resizePty(size);
+            self.pty_size = size;
+        }
+    } else if (!std.meta.eql(pre_size, .{ self.terminal.cols, self.terminal.rows })) {
+        // Emacs-owned PTYs carry no pixel geometry.
+        const process = env.symbolValue("ghostel--process");
+        if (env.isNotNil(process)) {
+            _ = env.f("set-process-window-size", .{ process, self.terminal.rows, self.terminal.cols });
         }
     }
     return true;
 }
 
-/// Set the color palette (256 entries).
-pub fn setColorPalette(self: *Self, palette: gt.color.Palette) void {
+/// Window size for the PTY.  The terminal must be locked.
+fn winSize(self: *Self) WinSize {
+    return .{
+        .cols = self.terminal.cols,
+        .rows = self.terminal.rows,
+        .xpixel = std.math.lossyCast(u16, self.terminal.width_px),
+        .ypixel = std.math.lossyCast(u16, self.terminal.height_px),
+    };
+}
+
+/// Set the color palette (256 entries). The terminal must be locked.
+fn setColorPaletteLocked(self: *Self, palette: gt.color.Palette) void {
     self.terminal.colors.palette.changeDefault(palette);
     self.terminal.flags.dirty.palette = true;
 }
 
 pub fn vtWrite(self: *Self, data: []const u8) !void {
-    try self.lockTerm();
+    try self.lock();
+    defer self.unlock();
     self.stream.nextSlice(data);
-    self.unlockTerm();
 }
 
 const PtyWriteReceipt = enum {
@@ -180,10 +199,15 @@ pub fn encode(
     buf: []u8,
     event: gt.input.KeyEvent,
 ) !?[]const u8 {
-    var options = gt.input.KeyEncodeOptions.fromTerminal(&self.terminal);
-    // Emacs resolves option-vs-meta before the event reaches us, so a
-    // meta modifier always means alt.
-    options.macos_option_as_alt = .true;
+    const options = blk: {
+        try self.lock();
+        defer self.unlock();
+        var options = gt.input.KeyEncodeOptions.fromTerminal(&self.terminal);
+        // Emacs resolves option-vs-meta before the event reaches us, so a
+        // meta modifier always means alt.
+        options.macos_option_as_alt = .true;
+        break :blk options;
+    };
 
     // Encode
     var writer = std.Io.Writer.fixed(buf);
@@ -203,14 +227,18 @@ pub fn encodeMouse(
     col: i64,
     mods_val: i64,
 ) !bool {
-    const options = gt.input.MouseEncodeOptions.fromTerminal(&self.terminal, .{
-        .screen = .{
-            .width = self.terminal.cols,
-            .height = self.terminal.rows,
-        },
-        .cell = .{ .width = 1, .height = 1 },
-        .padding = .{ .top = 0, .bottom = 0, .right = 0, .left = 0 },
-    });
+    const options = blk: {
+        try self.lock();
+        defer self.unlock();
+        break :blk gt.input.MouseEncodeOptions.fromTerminal(&self.terminal, .{
+            .screen = .{
+                .width = self.terminal.cols,
+                .height = self.terminal.rows,
+            },
+            .cell = .{ .width = 1, .height = 1 },
+            .padding = .{ .top = 0, .bottom = 0, .right = 0, .left = 0 },
+        });
+    };
 
     const event = gt.input.MouseEncodeEvent{
         .action = @enumFromInt(action),
@@ -231,6 +259,13 @@ pub fn encodeMouse(
 }
 
 pub fn encodeFocus(self: *Self, gained: bool) !bool {
+    const enabled = blk: {
+        try self.lock();
+        defer self.unlock();
+        break :blk self.terminal.modes.get(.focus_event);
+    };
+    if (!enabled) return false;
+
     const event = if (gained) gt.input.FocusEvent.gained else gt.input.FocusEvent.lost;
     var buf: [8]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buf);
@@ -250,14 +285,13 @@ pub const PasteOutcome = enum {
 };
 
 pub fn encodePaste(self: *Self, data: []u8, require_bracketed: bool) !PasteOutcome {
-    try self.lockTerm();
-    const options = gt.input.PasteOptions.fromTerminal(&self.terminal);
-    if (require_bracketed and !options.bracketed) {
-        self.unlockTerm();
-        return .bracketed_unavailable;
-    }
+    const options = blk: {
+        try self.lock();
+        defer self.unlock();
+        break :blk gt.input.PasteOptions.fromTerminal(&self.terminal);
+    };
+    if (require_bracketed and !options.bracketed) return .bracketed_unavailable;
     const slices = gt.input.encodePaste(data, options);
-    self.unlockTerm();
 
     var wrote = false;
     for (slices) |slice| {
@@ -285,17 +319,17 @@ pub fn encodePaste(self: *Self, data: []u8, require_bracketed: bool) !PasteOutco
 /// to ensure that the we fully render the very latest state in case any rows
 /// get promoted to scrollback due to vertical shrinking of the viewport.
 pub fn resize(self: *Self, cols: u16, rows: u16, cell_w: u16, cell_h: u16) !void {
-    try self.lockTerm();
-    defer self.unlockTerm();
+    try self.lock();
+    defer self.unlock();
     try self.renderer.resize(cols, rows, cell_w, cell_h);
 }
 
-pub fn lockTerm(self: *Self) !void {
-    if (self.process) |process| try process.lockTerm();
+pub fn lock(self: *Self) !void {
+    try self.mutex.lock(self.io);
 }
 
-pub fn unlockTerm(self: *Self) void {
-    if (self.process) |handler| handler.unlockTerm();
+pub fn unlock(self: *Self) void {
+    self.mutex.unlock(self.io);
 }
 
 pub fn spawnNativeProcess(
@@ -307,18 +341,24 @@ pub fn spawnNativeProcess(
 ) !ProcessPid {
     if (command.len == 0) return error.InvalidCommand;
 
+    const initial_size = blk: {
+        try self.lock();
+        defer self.unlock();
+        break :blk self.winSize();
+    };
+
     const process = try self.alloc.create(NativeProcess);
     errdefer self.alloc.destroy(process);
     try process.init(
         self.alloc,
         self.io,
-        self.terminal.cols,
-        self.terminal.rows,
+        initial_size,
         ProcessParams{ .file = command[0], .args = command, .env = env, .cwd = cwd },
-        &self.terminal,
+        self,
         event_fd,
     );
     self.process = process;
+    self.pty_size = initial_size;
     return process.pidValue();
 }
 
@@ -427,9 +467,6 @@ pub const emacs_functions = [_]emacs.FunctionEntry{
         .impl = struct {
             pub fn call(env: emacs.Env, nargs: isize, args: [*c]emacs.Value) !emacs.Value {
                 // Bit 0 = file medium, bit 1 = temp_file, bit 2 = shared_mem.
-                // Default 0 — only the direct medium (base64 inline) is enabled.
-                // The other mediums let a remote program instruct ghostel to read
-                // arbitrary local files / SHM regions, so opt-in only.
                 const kitty_mediums: u32 = if (nargs > 4 and env.isNotNil(args[4]))
                     (std.math.cast(u32, env.cast(i64, args[4])) orelse 0)
                 else
@@ -644,9 +681,6 @@ pub const emacs_functions = [_]emacs.FunctionEntry{
             pub fn call(env: emacs.Env, _: isize, args: [*c]emacs.Value) !emacs.Value {
                 if (env.isNil(args[0])) return env.nil();
                 const term = env.getUserPtr(Self, args[0]) orelse return error.InvalidTerminalHandle;
-                if (!term.terminal.modes.get(gt.modes.Mode.focus_event)) {
-                    return env.nil();
-                }
                 const gained = env.isNotNil(args[1]);
                 return if (try term.encodeFocus(gained)) env.t() else env.nil();
             }
@@ -695,22 +729,22 @@ pub const emacs_functions = [_]emacs.FunctionEntry{
                 var str_buf: [2048]u8 = undefined;
                 const colors_str = try env.extractString(args[1], &str_buf);
                 if (colors_str.len < 16 * 7) return error.InvalidPaletteLength;
-                try term.lockTerm();
-                defer term.unlockTerm();
+                try term.lock();
+                defer term.unlock();
                 var palette = term.terminal.colors.palette.current;
                 var idx: usize = 0;
                 while (idx < 16) : (idx += 1) {
                     const pos = idx * 7;
                     palette[idx] = try gt.color.RGB.parse(colors_str[pos .. pos + 7]);
                 }
-                term.setColorPalette(palette);
+                term.setColorPaletteLocked(palette);
                 return env.t();
             }
         },
     },
     .{
         .name = "ghostel--set-default-colors",
-        .arity = .{ 3, 3 },
+        .arity = .{ 4, 4 },
         .doc =
         \\Set protocol default foreground and background colors.
         \\
@@ -718,7 +752,10 @@ pub const emacs_functions = [_]emacs.FunctionEntry{
         \\color state.  The renderer intentionally does not emit them as
         \\default-cell face properties.
         \\
-        \\(ghostel--set-default-colors TERM FG-HEX BG-HEX)
+        \\(ghostel--set-default-colors TERM FG-HEX BG-HEX SCHEME)
+        \\
+        \\SCHEME is `light' or `dark'.  When it changes and the child enabled
+        \\Mode 2031, a CSI ? 997 n report is written to the PTY.
         ,
         .impl = struct {
             pub fn call(env: emacs.Env, _: isize, args: [*c]emacs.Value) !emacs.Value {
@@ -727,10 +764,25 @@ pub const emacs_functions = [_]emacs.FunctionEntry{
                 var bg_buf: [16]u8 = undefined;
                 const fg_str = try env.extractString(args[1], &fg_buf);
                 const bg_str = try env.extractString(args[2], &bg_buf);
-                try term.lockTerm();
-                defer term.unlockTerm();
-                term.terminal.colors.foreground.default = try gt.color.RGB.parse(fg_str);
-                term.terminal.colors.background.default = try gt.color.RGB.parse(bg_str);
+                const scheme: gt.device_status.ColorScheme =
+                    if (env.eq(args[3], emacs.sym.light)) .light else .dark;
+                const report = blk: {
+                    try term.lock();
+                    defer term.unlock();
+                    term.terminal.colors.foreground.default = try gt.color.RGB.parse(fg_str);
+                    term.terminal.colors.background.default = try gt.color.RGB.parse(bg_str);
+                    const changed = term.color_scheme != scheme;
+                    term.color_scheme = scheme;
+                    break :blk changed and term.terminal.modes.get(.report_color_scheme);
+                };
+                // Written outside the lock: a full PTY must not stall the reader thread.
+                // Best effort: a client can re-query with CSI ? 996 n.
+                if (report) {
+                    var buf: [gt.device_status.max_color_scheme_report_encode_size]u8 = undefined;
+                    var writer = std.Io.Writer.fixed(&buf);
+                    try gt.device_status.encodeColorSchemeReport(&writer, scheme);
+                    term.ptyWrite(writer.buffered()) catch {};
+                }
                 return env.t();
             }
         },
@@ -780,8 +832,8 @@ pub const emacs_functions = [_]emacs.FunctionEntry{
                 const mode: gt.modes.Mode = gt.modes.modeFromInt(mode_int, false) orelse {
                     return error.InvalidModeValue;
                 };
-                try term.lockTerm();
-                defer term.unlockTerm();
+                try term.lock();
+                defer term.unlock();
                 return if (term.terminal.modes.get(mode)) env.t() else env.nil();
             }
         },
@@ -797,9 +849,30 @@ pub const emacs_functions = [_]emacs.FunctionEntry{
         .impl = struct {
             pub fn call(env: emacs.Env, _: isize, args: [*c]emacs.Value) !emacs.Value {
                 const term = env.getUserPtr(Self, args[0]) orelse return error.InvalidTerminalHandle;
-                try term.lockTerm();
-                defer term.unlockTerm();
+                try term.lock();
+                defer term.unlock();
                 return if (term.terminal.screens.active_key == .alternate) env.t() else env.nil();
+            }
+        },
+    },
+    .{
+        .name = "ghostel--mouse-tracking-p",
+        .arity = .{ 1, 1 },
+        .doc =
+        \\Return t if the terminal reports wheel presses (DEC 1000/1002/1003).
+        \\
+        \\(ghostel--mouse-tracking-p TERM)
+        ,
+        .impl = struct {
+            pub fn call(env: emacs.Env, _: isize, args: [*c]emacs.Value) !emacs.Value {
+                if (env.isNil(args[0])) return env.nil();
+                const term = env.getUserPtr(Self, args[0]) orelse return error.InvalidTerminalHandle;
+                try term.lock();
+                defer term.unlock();
+                return switch (term.terminal.flags.mouse_event) {
+                    .none, .x10 => env.nil(),
+                    else => env.t(),
+                };
             }
         },
     },
@@ -819,8 +892,8 @@ pub const emacs_functions = [_]emacs.FunctionEntry{
                     .unwrap = true,
                     .trim = true,
                 };
-                try term.lockTerm();
-                defer term.unlockTerm();
+                try term.lock();
+                defer term.unlock();
                 var formatter = gt.formatter.TerminalFormatter.init(&term.terminal, options);
                 var writer = std.Io.Writer.Allocating.init(module_alloc);
                 defer writer.deinit();

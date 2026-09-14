@@ -69,15 +69,14 @@ buffer eventually shows up."
                                  (ghostel--kitty-mediums-bits))))))
       (kill-buffer buf))))
 
-(ert-deftest ghostel-test-exec-preserves-identity-bookkeeping ()
-  "`ghostel-exec' does not clobber buffer identity bookkeeping vars."
+(ert-deftest ghostel-test-exec-sets-identity ()
+  "`ghostel-exec' stamps the IDENTITY argument, defaulting to exec kind."
   (let ((buf (generate-new-buffer " *ghostel-exec-identity*")))
     (unwind-protect
         (progn
           (with-current-buffer buf
             (ghostel-mode)
-            (setq-local ghostel--managed-buffer-name "managed")
-            (setq-local ghostel--buffer-identity "identity"))
+            (setq-local ghostel--managed-buffer-name "managed"))
           (cl-letf (((symbol-function 'ghostel--load-module) #'ignore)
                     ((symbol-function 'ghostel--new)
                      (lambda (&rest _) 'fake-term))
@@ -86,10 +85,16 @@ buffer eventually shows up."
                     ((symbol-function 'ghostel--apply-bold-config) #'ignore)
                     ((symbol-function 'ghostel--spawn-pty)
                      (lambda (&rest _) 'fake-proc)))
-            (ghostel-exec buf "ls" nil)
+            (ghostel-exec buf "ls" '("-l"))
             (with-current-buffer buf
               (should (equal ghostel--managed-buffer-name "managed"))
-              (should (equal ghostel--buffer-identity "identity")))))
+              (should (equal ghostel--initial-name (buffer-name)))
+              (should (equal ghostel-identity
+                             '((kind . exec) (command . ("ls" "-l"))))))
+            (ghostel-exec buf "ls" nil '((kind . snowflake) (repl . "a")))
+            (with-current-buffer buf
+              (should (equal ghostel-identity
+                             '((kind . snowflake) (repl . "a")))))))
       (kill-buffer buf))))
 
 (defun ghostel-test-exec--pid-live-p (pid)
@@ -256,6 +261,46 @@ is nil, SIGHUP is ignored."
         (when (buffer-live-p buf)
           (ghostel-test--cleanup-exec-buffer buf))
         (delete-directory dir t)))))
+
+(ert-deftest ghostel-test-exec-exit-hook-window-delete-keeps-origin-writable ()
+  "An exit function deleting the selected window leaves other buffers alone.
+Deleting the selected window switches the current buffer; the sentinel's
+cleanup must not leak into it."
+  :tags '(native posix)
+  (skip-unless (file-executable-p "/bin/sh"))
+  (ghostel-test--with-pty-matrix backend
+    (let* ((origin (generate-new-buffer " *ghostel-test-exit-origin*"))
+           (buf (generate-new-buffer " *ghostel-test-exit-window*"))
+           proc pid window-deleted)
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            (set-window-buffer (selected-window) origin)
+            (set-window-buffer (select-window (split-window)) buf)
+            (let ((ghostel-kill-buffer-on-exit t))
+              (with-current-buffer buf
+                (setq proc (ghostel-exec
+                            buf "/bin/sh"
+                            (list "-c" (ghostel-test-exec--loop-script))))
+                (add-hook 'ghostel-exit-functions
+                          (lambda (buffer _event)
+                            (when-let* ((win (get-buffer-window buffer)))
+                              (delete-window win)
+                              (setq window-deleted t)))
+                          nil t)
+                (ghostel-test--wait-for-text "GHOSTEL_LIFECYCLE_READY" proc 5)
+                (setq pid ghostel--pid))
+              (signal-process pid 'TERM)
+              (ghostel-test--wait-until
+               (lambda () (not (buffer-live-p buf))) proc 5))
+            ;; Guard against a vacuous pass: the leak only happens when the
+            ;; hook really deleted the selected window.
+            (should window-deleted)
+            (should-not (buffer-local-value 'buffer-read-only origin)))
+        (ghostel-test-exec--kill-pid pid)
+        (when (buffer-live-p buf)
+          (ghostel-test--cleanup-exec-buffer buf))
+        (kill-buffer origin)))))
 
 (ert-deftest ghostel-test-exec-delete-process-kills-sighup-ignoring-child ()
   "Deleting the lifecycle process kills the child even when it ignores SIGHUP."

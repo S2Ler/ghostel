@@ -603,6 +603,30 @@ Driven through both PTY backends."
                                    (ghostel-test--latest-winsize "RESIZE")))
                  proc 6))))))
 
+(ert-deftest ghostel-test-native-pty-winsize-carries-cell-pixels ()
+  "The native PTY's window size carries the cell pixel geometry.
+Image tools (broot, ranger) read TIOCGWINSZ to size kitty graphics and
+fall back to text rendering when the pixel fields are zero."
+  :tags '(native posix)
+  (let ((ghostel-use-native-pty t))
+    (ghostel-test--with-exec-buffer
+        (_buf proc (ghostel-test--python)
+             (list "-c" "
+import fcntl, struct, termios, time
+for _ in range(100):
+    print('WS', *struct.unpack('HHHH', fcntl.ioctl(0, termios.TIOCGWINSZ, b'\\0' * 8)), flush=True)
+    time.sleep(0.1)
+"))
+      ;; Spawn seeds the pixel fields from the terminal's cell geometry.
+      (ghostel-test--wait-until
+       (lambda () (string-match-p "WS 24 80 [1-9][0-9]* [1-9]"
+                                  (or (ghostel--copy-all-text ghostel--term) "")))
+       proc 5)
+      (ghostel--set-size ghostel--term 24 80 9 23)
+      (ghostel-test--redraw ghostel--term t)
+      ;; rows cols xpixel ypixel: 80*9 by 24*23.
+      (ghostel-test--wait-for-text "WS 24 80 720 552" proc 5))))
+
 (ert-deftest ghostel-test-pre-spawn-hook-injects-into-process-environment ()
   "Hook `setenv' calls reach the spawned process via `process-environment'.
 `ghostel-pre-spawn-hook' fires with `process-environment' dynamically

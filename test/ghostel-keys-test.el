@@ -139,19 +139,8 @@ Covers punctuation, digits, uppercase, space, and lowercase letters."
 (defun ghostel-test--send-key-and-read-hex (key mods byte-count &optional setup)
   "Send KEY/MODS to a byte-recorder child and return BYTE-COUNT bytes as hex.
 SETUP, when non-nil, is called before sending the key."
-  (let ((python (executable-find "python3")))
-    (unless python (ert-skip "python3 not available"))
-    (ghostel-test--with-exec-buffer
-        (buf proc python
-             (list "-c" ghostel-test--pty-byte-recorder-script
-                   (number-to-string byte-count)))
-      (ghostel-test--wait-for-text "GHOSTEL_RECORDER_READY" proc 5)
-      (when setup (funcall setup))
-      (ghostel--send-encoded key mods)
-      (ghostel-test--wait-for-marker-payload
-       "GHOSTEL_INPUT_HEX:"
-       (lambda (hex) (= (length hex) (* 2 byte-count)))
-       proc 5))))
+  (ghostel-test--record-pty-bytes
+   byte-count (lambda () (when setup (funcall setup)) (ghostel--send-encoded key mods))))
 
 (ert-deftest ghostel-test-encode-key-kitty-backspace ()
   "Test that backspace is correctly encoded when kitty keyboard mode is active."
@@ -343,19 +332,8 @@ Without this guard a flood would spawn a storm of redraw timers."
 (defun ghostel-test--paste-and-read-hex (text byte-count &optional setup)
   "Paste TEXT to a byte-recorder child and return BYTE-COUNT bytes as hex.
 SETUP, when non-nil, is called before sending the paste."
-  (let ((python (executable-find "python3")))
-    (unless python (ert-skip "python3 not available"))
-    (ghostel-test--with-exec-buffer
-        (buf proc python
-             (list "-c" ghostel-test--pty-byte-recorder-script
-                   (number-to-string byte-count)))
-      (ghostel-test--wait-for-text "GHOSTEL_RECORDER_READY" proc 5)
-      (when setup (funcall setup))
-      (ghostel--paste-text text)
-      (ghostel-test--wait-for-marker-payload
-       "GHOSTEL_INPUT_HEX:"
-       (lambda (hex) (= (length hex) (* 2 byte-count)))
-       proc 5))))
+  (ghostel-test--record-pty-bytes
+   byte-count (lambda () (when setup (funcall setup)) (ghostel--paste-text text))))
 
 (defun ghostel-test--capture-paste-outcome (thunk)
   "Call THUNK and return its value, error, or quit as tagged data."
@@ -416,7 +394,7 @@ SETUP, when non-nil, is called before sending the paste."
       (unless python (ert-skip "python3 not available"))
       (ghostel-test--with-exec-buffer
           (buf proc python
-               (list "-c" ghostel-test--pty-byte-recorder-script "1"))
+               (ghostel-test--pty-byte-recorder-args 1))
         (ghostel-test--wait-for-text "GHOSTEL_RECORDER_READY" proc 5)
         (ghostel--write-vt ghostel--term "\e[?2004l")
         (let ((refusal
@@ -451,8 +429,8 @@ SETUP, when non-nil, is called before sending the paste."
       (unless python (ert-skip "python3 not available"))
       (ghostel-test--with-exec-buffer
           (buf proc python
-               (list "-c" ghostel-test--pty-byte-recorder-script
-                     (number-to-string (string-bytes (concat wire "!")))))
+               (ghostel-test--pty-byte-recorder-args
+                (string-bytes (concat wire "!"))))
         (ghostel-test--wait-for-text "GHOSTEL_RECORDER_READY" proc 5)
         (ghostel--write-vt ghostel--term "\e[?2004h")
         (should (eq t (ghostel-paste-string payload t)))
@@ -623,6 +601,28 @@ SETUP, when non-nil, is called before sending the paste."
   ;; C-@ should also be bound (sends NUL).
   (should (commandp (lookup-key ghostel-semi-char-mode-map (kbd "C-@")))))
 
+(ert-deftest ghostel-test-c-q-send-next-key ()
+  "Semi-char binds \\`C-q' to `ghostel-send-next-key'; char mode sends it raw.
+The two-key alias in `ghostel-mode-map' stays bound.  Listing the
+key in `ghostel-keymap-exceptions' unbinds it so the global
+`quoted-insert' takes over."
+  (should (eq (lookup-key ghostel-semi-char-mode-map (kbd "C-q"))
+              #'ghostel-send-next-key))
+  (should (eq (lookup-key ghostel-char-mode-map (kbd "C-q"))
+              #'ghostel--send-event))
+  (should (eq (lookup-key ghostel-mode-map (kbd "C-c C-q"))
+              #'ghostel-send-next-key))
+  (let ((orig (default-value 'ghostel-keymap-exceptions)))
+    (unwind-protect
+        (progn
+          (customize-set-variable 'ghostel-keymap-exceptions
+                                  (cons "C-q" orig))
+          (should-not (lookup-key ghostel-semi-char-mode-map (kbd "C-q"))))
+      (customize-set-variable 'ghostel-keymap-exceptions orig))
+    ;; Restored: C-q is bound again.
+    (should (eq (lookup-key ghostel-semi-char-mode-map (kbd "C-q"))
+                #'ghostel-send-next-key))))
+
 (ert-deftest ghostel-test-c-g-binding ()
   "`ghostel-mode-map' binds the quit key to a dedicated send handler."
   (should (eq (lookup-key ghostel-mode-map (kbd "C-g"))
@@ -718,6 +718,17 @@ side effects have to happen explicitly inside the command."
           (should-not quit-flag)
           (should (equal sent '(("g" . "ctrl")))))
       (kill-buffer buf))))
+
+(ert-deftest ghostel-test-user-input-deactivates-mark ()
+  "Explicit terminal input clears an active region.
+Input goes to the PTY, not the buffer, so no buffer edit deactivates the mark."
+  (let ((transient-mark-mode t))
+    (with-temp-buffer
+      (insert "hello world")
+      (set-mark (point-min))
+      (should (region-active-p))
+      (ghostel--on-user-input)
+      (should-not (region-active-p)))))
 
 (ert-deftest ghostel-test-c-g-binding-routes-through-send-handler ()
   "Quit binding must route through the quit handler in both live input modes.
@@ -1105,6 +1116,32 @@ inject raw bytes a kitty-protocol child cannot parse."
         (ghostel-send-next-key))
       (should (equal "up" captured-key))
       (should (equal "" captured-mods)))))
+
+(ert-deftest ghostel-test-send-next-key-fast-exits-before-sending ()
+  "Send-next-key exits copy/Emacs mode before forwarding the key."
+  (let ((call-order nil)
+        (ghostel--input-mode 'copy)
+        (ghostel-readonly-fast-exit t))
+    (cl-letf (((symbol-function 'ghostel-readonly-exit)
+               (lambda () (push 'exit call-order)))
+              ((symbol-function 'ghostel--send-encoded)
+               (lambda (_key _mods &optional _utf8)
+                 (push 'send call-order))))
+      (let ((unread-command-events (list ?\C-x)))
+        (ghostel-send-next-key))
+      (should (equal '(send exit) call-order)))))
+
+(ert-deftest ghostel-test-send-next-key-no-fast-exit-stays-readonly ()
+  "Send-next-key stays in copy/Emacs mode when fast exit is off."
+  (let ((exit-called nil)
+        (ghostel--input-mode 'copy)
+        (ghostel-readonly-fast-exit nil))
+    (cl-letf (((symbol-function 'ghostel-readonly-exit)
+               (lambda () (setq exit-called t)))
+              ((symbol-function 'ghostel--send-encoded) #'ignore))
+      (let ((unread-command-events (list ?\C-x)))
+        (ghostel-send-next-key))
+      (should-not exit-called))))
 
 (ert-deftest ghostel-test-send-string-routes-to-send-string ()
   "`ghostel-send-string' forwards its argument to `ghostel--send-string'."

@@ -65,26 +65,21 @@ redraw.  Native OSC-8 hyperlinks remain applied during redraw."
   :group 'ghostel)
 
 (defcustom ghostel-file-detection-path-regex
-  "[~[:alnum:]_.-]*/[^] \t\n\r:\"<>(){}[`']+"
+  "[~[:alnum:]_.-]*/[^] \t\n\r:\"<>(){}[`']*[^] \t\n\r:\"<>(){}[`'.,;!?]"
   "Regex matching the PATH portion of a file:line[:col] reference.
-This is the middle of the full detection pattern; ghostel wraps it
-with a fixed leading path-boundary anchor (line start or any
-non-path character) and a fixed `:LINE[:COL]' tail, so any match
-is guaranteed to end in `:DIGITS'.
+Ghostel adds the leading path-boundary anchor and the optional
+`:LINE[:COL]' tail itself, so the value must contain neither.
+The final character class excludes sentence punctuation so a
+path ending a sentence links without the trailing mark.
 
-The matched path is resolved against `default-directory'; linkification
-only applies when that file exists.  The default matches absolute
-paths, explicit `./' paths, tilde-prefixed paths like `~/file.el',
-and bare relative paths containing at least one `/' (e.g. compiler
-output like `src/main.rs').  Paths embedded in punctuation like
-`(/home/user/index.js:17:5)' are supported via the fixed anchor.
+The match is resolved against `default-directory' and linkified only
+when that file exists.  The default matches any path with at least one
+char after a `/': absolute, `./', `~/', or bare relative like `src/main.rs'.
 
-Performance: each match triggers a filesystem check on every redraw.
-Broadening this pattern (for example to match bare `file.go' without
-a `/') will cause `file-exists-p' to be called for every matching
-token, which can be expensive on slow or network filesystems (NFS,
-FUSE).  The default uses non-backtracking character classes so the
-per-redraw scan stays cheap."
+Every distinct match costs a `file-exists-p' per scan, so broadening
+the pattern (e.g. to bare `file.go' without a `/') is expensive on
+slow or network filesystems.  Avoid unbounded backtracking;
+the scan covers every changed region."
   :type 'regexp
   :group 'ghostel)
 

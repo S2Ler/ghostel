@@ -194,6 +194,33 @@ modes (47 / 1047 / 1049) are handled uniformly."
     (let ((state (ghostel--copy-all-text term)))
       (should (string-match-p "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" state))))) ; 40 x's on row
 
+(ert-deftest ghostel-test-size-reports-before-first-redraw ()
+  "Size reports carry the seeded cell geometry before the first redraw.
+Programs started by `ghostel-exec' query CSI 14/16 t before anything
+has been rendered."
+  :tags '(native)
+  (let ((term (ghostel--new 25 80 1000))
+        (ghostel--process 'fake-process)
+        (replies nil))
+    (cl-letf (((symbol-function 'process-send-string)
+               (lambda (_process string) (push string replies))))
+      ;; Seed the cell geometry as `ghostel--init-buffer' does;
+      ;; nothing below triggers a redraw.
+      (ghostel--set-size term 25 80 9 23)
+      (ghostel--write-vt term "\e[16t\e[14t\e[18t")
+      ;; Compare the concatenation so PTY write batching can't split
+      ;; or join the three replies differently across backends.
+      (should (equal (concat "\e[6;23;9t"    ; cell size in px
+                             "\e[4;575;720t" ; text area in px: 25*23 x 80*9
+                             "\e[8;25;80t")  ; text area in cells
+                     (apply #'concat (nreverse replies))))
+      ;; A pending grid resize leaves all three replies on the current grid.
+      (setq replies nil)
+      (ghostel--set-size term 30 100 9 23)
+      (ghostel--write-vt term "\e[16t\e[14t\e[18t")
+      (should (equal "\e[6;23;9t\e[4;575;720t\e[8;25;80t"
+                     (apply #'concat (nreverse replies)))))))
+
 (defmacro ghostel-test--with-resize-stubs (size &rest body)
   "Run BODY with resize stubs returning SIZE for process window size."
   (declare (indent 1))

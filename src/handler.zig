@@ -2,21 +2,42 @@
 //! standard terminal handler but intercepts OSC-related actions so we can route
 //! them to Elisp callbacks instead of re-parsing the same bytes ourselves.
 
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+
 const emacs = @import("emacs.zig");
 const gt = @import("ghostty-vt");
 const GhostelTerm = @import("GhostelTerm.zig");
 
-pub fn GhostelHandler(Context: type) type {
+const log = std.log.scoped(.GhostelHandler);
+
+// xterm limits the title stack to 10 entries.
+const title_stack_max = 10;
+
+pub fn GhostelHandler(Effects: type) type {
     return struct {
         const Self = @This();
 
-        context: Context,
+        alloc: Allocator,
+        term: *GhostelTerm,
+        effects: Effects,
         inner: gt.TerminalStream.Handler,
+        // Null entries represent an unset title.
+        title_stack: [title_stack_max]?[]u8,
+        title_stack_len: usize,
 
-        pub fn init(context: Context, terminal: *gt.Terminal) Self {
-            var self = Self{ .context = context, .inner = .init(terminal) };
+        pub fn init(alloc: Allocator, term: *GhostelTerm, effects: Effects) Self {
+            var self = Self{
+                .alloc = alloc,
+                .term = term,
+                .effects = effects,
+                .inner = .init(&term.terminal),
+                .title_stack = @splat(null),
+                .title_stack_len = 0,
+            };
             self.inner.effects.write_pty = &writePtyCallback;
             self.inner.effects.bell = &bellCallback;
+            self.inner.effects.color_scheme = &colorSchemeCallback;
             self.inner.effects.device_attributes = &deviceAttributesCallback;
             self.inner.effects.title_changed = &titleChangedCallback;
             self.inner.effects.size = &sizeCallback;
@@ -25,6 +46,7 @@ pub fn GhostelHandler(Context: type) type {
 
         /// Called by `gt.Stream.deinit`.
         pub fn deinit(self: *Self) void {
+            self.clearTitleStack();
             self.inner.deinit();
         }
 
@@ -54,6 +76,20 @@ pub fn GhostelHandler(Context: type) type {
                 .show_desktop_notification => self.handleNotification(value),
                 .progress_report => self.handleProgressReport(value),
 
+                .full_reset => {
+                    const had_title = self.inner.terminal.getTitle() != null;
+                    self.clearTitleStack();
+                    self.inner.vt(action, value);
+                    // libghostty clears the title on RIS without firing title_changed.
+                    if (had_title) titleChangedCallback(&self.inner);
+                    // Progress exists only in Elisp, so RIS must remove it explicitly.
+                    self.handleProgressReport(.{ .state = .remove });
+                },
+
+                // The parser filters icon-title forms; indexed stacks are unsupported.
+                .title_push => if (value == 0) self.titlePush(),
+                .title_pop => if (value == 0) self.titlePop(),
+
                 else => self.inner.vt(action, value),
             }
         }
@@ -62,13 +98,20 @@ pub fn GhostelHandler(Context: type) type {
         fn writePtyCallback(handler: *gt.TerminalStream.Handler, data: [:0]const u8) void {
             const self: *Self = @fieldParentPtr("inner", handler);
             if (data.len == 0) return;
-            self.context.ptyWriteFromTerminal(data);
+            self.effects.ptyWriteFromTerminal(data);
         }
 
         /// Called when the terminal receives BEL.
         fn bellCallback(handler: *gt.TerminalStream.Handler) void {
             const self: *Self = @fieldParentPtr("inner", handler);
-            self.context.effect("ding", .{});
+            self.effects.effect("ding", .{});
+        }
+
+        /// CSI ? 996 n - the scheme Emacs assigned, not the OSC 11 color.
+        fn colorSchemeCallback(handler: *gt.TerminalStream.Handler) ?gt.device_status.ColorScheme {
+            const self: *Self = @fieldParentPtr("inner", handler);
+            // Streams are advanced only while their GhostelTerm is locked.
+            return self.term.color_scheme;
         }
 
         // TODO: DeviceAttributes is not exported from ghostty-vt for some reason.
@@ -109,13 +152,45 @@ pub fn GhostelHandler(Context: type) type {
             };
         }
 
-        /// Called when the terminal title changes.
+        /// Called when the terminal title changes.  A cleared title (empty
+        /// OSC 0/2) reads back as null and is forwarded as "".
         fn titleChangedCallback(handler: *gt.TerminalStream.Handler) void {
             const self: *Self = @fieldParentPtr("inner", handler);
-            const title = handler.terminal.getTitle();
-            if (title) |t| {
-                self.context.effect("ghostel--set-title", .{t});
+            const title = handler.terminal.getTitle() orelse "";
+            self.effects.effect("ghostel--set-title", .{title});
+        }
+
+        // ---------------------------------------------------------------------------
+        // CSI 22/23 t — window title stack
+        // ---------------------------------------------------------------------------
+
+        fn titlePush(self: *Self) void {
+            if (self.title_stack_len == title_stack_max) return;
+            const entry: ?[]u8 = if (self.inner.terminal.getTitle()) |t|
+                self.alloc.dupe(u8, t) catch {
+                    log.warn("title push dropped: out of memory", .{});
+                    return;
+                }
+            else
+                null;
+            self.title_stack[self.title_stack_len] = entry;
+            self.title_stack_len += 1;
+        }
+
+        // Route restores through the inner handler to synchronize native and Elisp state.
+        fn titlePop(self: *Self) void {
+            if (self.title_stack_len == 0) return;
+            self.title_stack_len -= 1;
+            const entry = self.title_stack[self.title_stack_len];
+            self.inner.vt(.window_title, .{ .title = entry orelse "" });
+            if (entry) |e| self.alloc.free(e);
+        }
+
+        fn clearTitleStack(self: *Self) void {
+            for (self.title_stack[0..self.title_stack_len]) |entry| {
+                if (entry) |e| self.alloc.free(e);
             }
+            self.title_stack_len = 0;
         }
 
         // ---------------------------------------------------------------------------
@@ -143,7 +218,7 @@ pub fn GhostelHandler(Context: type) type {
             else
                 null;
 
-            self.context.effect("ghostel--osc133-marker", .{ &type_str, param_val });
+            self.effects.effect("ghostel--osc133-marker", .{ &type_str, param_val });
         }
 
         // ---------------------------------------------------------------------------
@@ -153,7 +228,7 @@ pub fn GhostelHandler(Context: type) type {
         /// Update Emacs from the reported PWD.
         fn handleReportPwd(self: *Self, v: gt.StreamAction.ReportPwd) void {
             if (v.url.len == 0) return;
-            self.context.effect("ghostel--update-directory", .{v.url});
+            self.effects.effect("ghostel--update-directory", .{v.url});
         }
 
         // ---------------------------------------------------------------------------
@@ -172,10 +247,10 @@ pub fn GhostelHandler(Context: type) type {
             if (v.data.len == 1 and v.data[0] == '?') return;
 
             switch (v.kind) {
-                'e' => _ = self.context.effect("ghostel--osc52-eval", .{v.data}),
+                'e' => _ = self.effects.effect("ghostel--osc52-eval", .{v.data}),
                 else => {
                     const kind_str: [1]u8 = .{v.kind};
-                    _ = self.context.effect("ghostel--osc52-handle", .{ &kind_str, v.data });
+                    _ = self.effects.effect("ghostel--osc52-handle", .{ &kind_str, v.data });
                 },
             }
         }
@@ -190,7 +265,7 @@ pub fn GhostelHandler(Context: type) type {
         /// it at the FFI boundary rather than pay the call for nothing.
         fn handleNotification(self: *Self, v: gt.StreamAction.ShowDesktopNotification) void {
             if (v.title.len == 0 and v.body.len == 0) return;
-            self.context.effect("ghostel--handle-notification", .{ v.title, v.body });
+            self.effects.effect("ghostel--handle-notification", .{ v.title, v.body });
         }
 
         // ---------------------------------------------------------------------------
@@ -207,7 +282,7 @@ pub fn GhostelHandler(Context: type) type {
                 .pause => "pause",
             };
             const progress_val = if (v.progress) |p| p else null;
-            self.context.effect("ghostel--osc-progress", .{ state_str, progress_val });
+            self.effects.effect("ghostel--osc-progress", .{ state_str, progress_val });
         }
     };
 }

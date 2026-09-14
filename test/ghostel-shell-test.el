@@ -209,6 +209,73 @@ newest-first list aligns with the buffer-order regions."
                                       (match-string 1 output))))
       (delete-directory fish-home t))))
 
+(ert-deftest ghostel-test-fish-osc133-handlers-track-native-marking ()
+  "Fish OSC 133 handlers are defined exactly when native marking is off.
+
+fish 4.0+ with the `mark-prompt' feature flag emits the markers
+natively; ghostel handlers on top would double every A/C/D.  With
+native marking off (fish < 4, or `no-mark-prompt' in fish_features)
+the handlers must load.  The rest of the integration (OSC 7,
+`ghostel_cmd') loads either way."
+  :tags '(:fish)
+  (skip-unless (executable-find "fish"))
+  (let* ((root (or (ghostel--resource-root)
+                   (file-name-directory (locate-library "ghostel"))))
+         (shell-fish (expand-file-name "etc/shell/ghostel.fish" root)))
+    (skip-unless (file-exists-p shell-fish))
+    (let ((probe
+           (concat
+            (format "source %s\n" shell-fish)
+            "status test-feature mark-prompt 2>/dev/null;"
+            " and echo native=on; or echo native=off\n"
+            "functions -q __ghostel_mark_prompt_start; and echo markers=yes; or echo markers=no\n"
+            "functions -q __ghostel_osc7; and echo osc7=yes; or echo osc7=no\n"
+            "functions -q ghostel_cmd; and echo cmd=yes; or echo cmd=no\n")))
+      ;; Default features: handlers iff fish does not mark natively.
+      (let ((output (with-temp-buffer
+                      (call-process "fish" nil (current-buffer) nil
+                                    "--no-config" "-c" probe)
+                      (buffer-string))))
+        (should (string-match-p "^osc7=yes$" output))
+        (should (string-match-p "^cmd=yes$" output))
+        (should (string-match-p (if (string-match-p "^native=on$" output)
+                                    "^markers=no$" "^markers=yes$")
+                                output)))
+      ;; Native marking disabled (unknown flags are ignored on fish
+      ;; without it): the handlers must load.
+      (let ((output (with-temp-buffer
+                      (call-process "fish" nil (current-buffer) nil
+                                    "--no-config" "--features" "no-mark-prompt"
+                                    "-c" probe)
+                      (buffer-string))))
+        (should (string-match-p "^markers=yes$" output)))
+      ;; Handler lifecycle, driven by emitted events: one D per
+      ;; completed command, a synthetic D only for a C whose command
+      ;; never reached fish_postexec (e.g. cancelled), no D on the
+      ;; first or on idle prompts.
+      (let* ((probe
+              (concat
+               (format "source %s\n" shell-fish)
+               "emit fish_prompt\n"          ; A (no first-prompt D)
+               "emit fish_preexec true\n"    ; C
+               "emit fish_postexec true\n"   ; D;0
+               "emit fish_prompt\n"          ; A (no duplicate D)
+               "emit fish_prompt\n"          ; A (idle prompt: no D)
+               "emit fish_preexec sleep\n"   ; C
+               "emit fish_prompt\n"))        ; D (close cancelled C) + A
+             (output (with-temp-buffer
+                       (call-process "fish" nil (current-buffer) nil
+                                     "--no-config" "--features"
+                                     "no-mark-prompt" "-c" probe)
+                       (buffer-string)))
+             (markers nil)
+             (start 0))
+        (while (string-match "\e]133;\\([^\a\e]*\\)\a" output start)
+          (push (match-string 1 output) markers)
+          (setq start (match-end 0)))
+        (should (equal (nreverse markers)
+                       '("A" "C" "D;0" "A" "A" "C" "D" "A")))))))
+
 (ert-deftest ghostel-test-nu-auto-inject-loads-integration ()
   "Nushell auto-inject shim chains to ghostel.nu and cleans XDG_DATA_DIRS.
 The shim is vendor-autoloaded via XDG_DATA_DIRS; it locates ghostel.nu
@@ -307,6 +374,184 @@ skips it), and `--execute' enters an interactive shell."
       (ghostel--update-directory file-url)
       (should (equal old ghostel--last-directory)))))       ; dedup
 
+(ert-deftest ghostel-test-update-directory-kitty-scheme ()
+  "OSC 7 kitty-shell-cwd:// reports carry the path verbatim.
+`#', `?', and `%XX' stay literal."
+  :tags '(posix)
+  (let* ((host (system-name))
+         (base (make-temp-file "ghostel-osc7-" t))
+         (weird (expand-file-name "a#b?c%20d" base)))
+    (unwind-protect
+        (progn
+          (make-directory weird)
+          (let ((ghostel--last-directory nil)
+                (default-directory temporary-file-directory)
+                list-buffers-directory)
+            (ghostel--update-directory
+             (concat "kitty-shell-cwd://" host weird))
+            (should (equal (file-name-as-directory weird)
+                           default-directory)))
+          ;; Scheme without a path is ignored.
+          (let ((ghostel--last-directory nil)
+                (default-directory temporary-file-directory)
+                list-buffers-directory)
+            (ghostel--update-directory (concat "kitty-shell-cwd://" host))
+            (should (equal temporary-file-directory default-directory))))
+      (delete-directory base t))))
+
+(ert-deftest ghostel-test-update-directory-kitty-scheme-remote ()
+  "A report from a foreign host builds a TRAMP path with `#' intact."
+  (let ((ghostel-tramp-default-method "ssh"))
+    (dolist (uri '("kitty-shell-cwd://otherhost.example.com/tmp/a b#c"
+                   "file://otherhost.example.com/tmp/a b#c"))
+      (let ((ghostel--last-directory nil)
+            (default-directory temporary-file-directory)
+            list-buffers-directory)
+        (ghostel--update-directory uri)
+        (should (equal "/ssh:otherhost.example.com:/tmp/a b#c/"
+                       default-directory))))))
+
+(ert-deftest ghostel-test-update-directory-file-url-decodes ()
+  "OSC 7 file:// reports are percent-decoded, UTF-8 aware.
+Unescaped ASCII input round-trips unchanged, raw `#' and `?' stay in
+the path, `%0D' decodes to a carriage return, and when only the raw
+`%XX' spelling names a directory the raw spelling wins."
+  :tags '(posix)
+  (let* ((host (system-name))
+         (base (make-temp-file "ghostel-osc7-" t))
+         (spaced (expand-file-name "a b" base))
+         (unicode (expand-file-name "päth" base))
+         (percent (expand-file-name "50%off" base))
+         (rawonly (expand-file-name "e%20f" base))
+         (hashed (expand-file-name "f#g?h" base))
+         (creturn (expand-file-name "cr\rq" base)))
+    (unwind-protect
+        (progn
+          (dolist (d (list spaced unicode percent rawonly hashed creturn))
+            (make-directory d))
+          (cl-flet ((track (uri)
+                      (let ((ghostel--last-directory nil)
+                            (default-directory temporary-file-directory)
+                            list-buffers-directory)
+                        (ghostel--update-directory uri)
+                        default-directory)))
+            (should (equal (file-name-as-directory spaced)
+                           (track (concat "file://" host base "/a%20b"))))
+            (should (equal (file-name-as-directory unicode)
+                           (track (concat "file://" host base "/p%C3%A4th"))))
+            (should (equal (file-name-as-directory percent)
+                           (track (concat "file://" host base "/50%25off"))))
+            (should (equal (file-name-as-directory spaced)
+                           (track (concat "file://" host spaced))))
+            ;; Only the literal "e%20f" exists — raw spelling wins.
+            (should (equal (file-name-as-directory rawonly)
+                           (track (concat "file://" host rawonly))))
+            ;; Both "a b" and a literal "a%20b" exist — decoded wins.
+            (make-directory (expand-file-name "a%20b" base))
+            (should (equal (file-name-as-directory spaced)
+                           (track (concat "file://" host base "/a%20b"))))
+            ;; Raw `#'/`?' stay in the path.
+            (should (equal (file-name-as-directory hashed)
+                           (track (concat "file://" host hashed))))
+            ;; %0D is a carriage return, not eol-converted to LF.
+            (should (equal (file-name-as-directory creturn)
+                           (track (concat "file://" host base "/cr%0Dq"))))))
+      (delete-directory base t))))
+
+(ert-deftest ghostel-test-local-host-p-preserves-match-data ()
+  "`ghostel--local-host-p' keeps the caller's match data intact.
+The glued-drive parse reads `match-string' after probing the host; a
+dotted host reaches the `split-string' clause, which matches internally."
+  (string-match "\\`\\(foo\\)\\(bar\\)\\'" "foobar")
+  (ghostel--local-host-p "somehost.local")
+  (should (equal "bar" (match-string 2 "foobar"))))
+
+(ert-deftest ghostel-test-update-directory-windows-drive-glued-host ()
+  "A drive glued onto the local authority tracks as the drive path.
+No TRAMP host is fabricated from the glued spelling."
+  ;; Bind `system-type' inside `cl-letf': installing the stub may
+  ;; native-compile a trampoline, which must run on the real platform.
+  (let ((ghostel--last-directory nil)
+        (default-directory temporary-file-directory)
+        list-buffers-directory)
+    (cl-letf (((symbol-function 'file-directory-p)
+               (lambda (f) (equal f "d:/repos/foo"))))
+      (let ((system-type 'windows-nt))
+        (ghostel--update-directory
+         (concat "kitty-shell-cwd://" (system-name) "d:/repos/foo")))
+      (should (equal "d:/repos/foo/" default-directory)))))
+
+(ert-deftest ghostel-test-update-directory-authority-trailing-colon ()
+  "A trailing-colon authority never rewrites a foreign host.
+The empty-port colon is stripped; a local empty-port authority
+stays local."
+  (let ((ghostel-tramp-default-method "ssh"))
+    (dolist (case '(("kitty-shell-cwd://otherhostd:/repos/foo"
+                     . "/ssh:otherhostd:/repos/foo/")
+                    ("file://otherhost:/home/user"
+                     . "/ssh:otherhost:/home/user/")))
+      (let ((ghostel--last-directory nil)
+            (default-directory temporary-file-directory)
+            list-buffers-directory)
+        (ghostel--update-directory (car case))
+        (should (equal (cdr case) default-directory))))
+    (let ((base (make-temp-file "ghostel-osc7-" t)))
+      (unwind-protect
+          ;; A drive-lettered BASE would re-trigger the glue parse;
+          ;; the empty-port form is only unambiguous for POSIX paths.
+          (unless (string-match-p "\\`[[:alpha:]]:/" base)
+            (let ((ghostel--last-directory nil)
+                  (default-directory temporary-file-directory)
+                  list-buffers-directory)
+              (ghostel--update-directory
+               (concat "file://" (system-name) ":" base))
+              (should (equal (file-name-as-directory base)
+                             default-directory))))
+        (delete-directory base)))))
+
+(ert-deftest ghostel-test-update-directory-windows-slash-drive ()
+  "On Windows a slash-drive URL path (/d:/foo) resolves to d:/foo."
+  (dolist (case '(("/d:/repos/foo" . "d:/repos/foo")
+                  ("/c:\\repos\\foo" . "c:\\repos\\foo")))
+    (let ((ghostel--last-directory nil)
+          (default-directory temporary-file-directory)
+          list-buffers-directory)
+      (cl-letf (((symbol-function 'file-directory-p)
+                 (lambda (f) (equal f (cdr case)))))
+        (let ((system-type 'windows-nt))
+          (ghostel--update-directory
+           (concat "file://" (system-name) (car case))))
+        (should (equal (file-name-as-directory (cdr case))
+                       default-directory))))))
+
+(ert-deftest ghostel-test-update-directory-windows-msys-path ()
+  "On Windows the MSYS and Cygwin mount spellings resolve to the drive path.
+A lookalike on the current drive must not shadow the translation."
+  (dolist (case '(("/d/repos/foo" ("d:/repos/foo"))
+                  ("/cygdrive/d/repos/foo" ("d:/repos/foo"))
+                  ("/d/repos/foo" ("/d/repos/foo" "d:/repos/foo"))))
+    (let ((ghostel--last-directory nil)
+          (default-directory temporary-file-directory)
+          list-buffers-directory)
+      (cl-letf (((symbol-function 'file-directory-p)
+                 (lambda (f) (member f (cadr case)))))
+        (let ((system-type 'windows-nt))
+          (ghostel--update-directory
+           (concat "kitty-shell-cwd://" (system-name) (car case))))
+        (should (equal "d:/repos/foo/" default-directory))))))
+
+(ert-deftest ghostel-test-update-directory-windows-plain-path ()
+  "Plain-path reports (OSC 9;9) get the same Windows normalization."
+  (dolist (dir '("/d/repos/foo" "/d:/repos/foo"))
+    (let ((ghostel--last-directory nil)
+          (default-directory temporary-file-directory)
+          list-buffers-directory)
+      (cl-letf (((symbol-function 'file-directory-p)
+                 (lambda (f) (equal f "d:/repos/foo"))))
+        (let ((system-type 'windows-nt))
+          (ghostel--update-directory dir))
+        (should (equal "d:/repos/foo/" default-directory))))))
+
 (ert-deftest ghostel-test-list-buffers-directory ()
   "Test that `ghostel-mode' exposes cwd via `list-buffers-directory'."
   (let ((default-directory (file-name-as-directory
@@ -354,8 +599,8 @@ the buffer is misclassified as remote, switching on TRAMP."
                      (call-process "bash" nil (current-buffer) nil
                                    "--noprofile" "--norc" "-c" probe)
                      (buffer-string))))
-      ;; Probe emits: \e]7;file://HOST/\a
-      (should (string-match "\e\\]7;file://\\([^/]*\\)/" output))
+      ;; Probe emits: \e]7;kitty-shell-cwd://HOST/\a
+      (should (string-match "\e\\]7;kitty-shell-cwd://\\([^/]*\\)/" output))
       (let ((emitted (match-string 1 output)))
         ;; Polluted $HOSTNAME must not appear in the OSC 7 host.
         (should-not (equal emitted fake))
@@ -414,6 +659,66 @@ output must be ours, not the competing one."
       ;; stores whichever fires last per cycle.
       (should-not (string-match-p "competing-host" (car (last osc7s)))))))
 
+(defun ghostel-shell-test--count-occurrences (needle s)
+  "Count non-overlapping occurrences of NEEDLE in S."
+  (let ((n 0) (start 0))
+    (while (setq start (string-search needle s start))
+      (setq n (1+ n) start (+ start (length needle))))
+    n))
+
+(defconst ghostel-shell-test--force-debug-probe
+  " __ghostel_preexec_ps0=''; trap '__ghostel_debug_preexec' DEBUG;"
+  "Probe fragment forcing the bash<4.4 shell-integration setup.
+Installs what the version gate in ghostel.bash selects on old bash:
+no PS0 hook, DEBUG-trap adapter.")
+
+(defun ghostel-shell-test--interactive-bash (lines)
+  "Feed LINES one at a time to an interactive bash on a PTY.
+The first line must source ghostel.bash: each line is sent only
+after the previous one's prompt cycle emitted its 133;A, so PS0
+expansion is attributable per line.  An entry of the form
+\(:raw . STRING) is sent verbatim - no newline, no prompt-cycle
+wait - for keystrokes like a `bind -x' key.  A final `exit' is
+appended (it adds one 133;C of its own, like any typed line).
+Return all output.  ghostel.bash re-enables PTY echo, so typed
+lines after the sourcing line are echoed into the output."
+  (let* ((buf (generate-new-buffer " *ghostel-bash-interactive*"))
+         (process-environment
+          (append '("INSIDE_EMACS=ghostel" "TERM=dumb" "HISTFILE=/dev/null")
+                  process-environment))
+         (proc (make-process
+                :name "ghostel-test-bash-interactive" :buffer buf
+                :command '("bash" "--noprofile" "--norc" "-i")
+                :connection-type 'pty))
+         (cycles 0))
+    (unwind-protect
+        (progn
+          (set-process-window-size proc 48 200)
+          (dolist (line lines)
+            (if (eq (car-safe line) :raw)
+                (process-send-string proc (cdr line))
+              (process-send-string proc (concat line "\n"))
+              (setq cycles (1+ cycles))
+              (ghostel-test--wait-for
+               proc (lambda ()
+                      (with-current-buffer buf
+                        (>= (ghostel-shell-test--count-occurrences
+                             "\e]133;A" (buffer-string))
+                            cycles))))))
+          (process-send-string proc "exit\n")
+          (ghostel-test--wait-for
+           proc (lambda () (not (process-live-p proc))) 10)
+          ;; The exit is visible via `process-live-p' before the last
+          ;; PTY chunk (echoed `exit' plus its PS0 output) reaches the
+          ;; buffer; drain until the buffer stops growing.
+          (let ((prev -1))
+            (while (/= prev (buffer-size buf))
+              (setq prev (buffer-size buf))
+              (accept-process-output nil 0.1)))
+          (with-current-buffer buf (buffer-string)))
+      (when (process-live-p proc) (delete-process proc))
+      (kill-buffer buf))))
+
 (ert-deftest ghostel-test-bash-prompt-command-array-captured ()
   "Array PROMPT_COMMAND (systemd osc-context style) is captured whole.
 
@@ -470,16 +775,17 @@ emitting 133;A."
         (should-not (string-match-p "\e\\]133;C" (substring output a-pos)))))))
 
 (ert-deftest ghostel-test-bash-prompt-command-array-sibling-hook-harmless ()
-  "A hook appended to the PROMPT_COMMAND array after load is harmless.
+  "A PROMPT_COMMAND array sibling is harmless on the DEBUG-trap path.
 
 When something appends to the bash-5.1+ PROMPT_COMMAND array after
 ghostel.bash loaded (manual setup sourcing ghostel.bash before
 profile.d, `direnv hook bash', ...), the sibling element executes at
-top level each prompt cycle.  The DEBUG trap must not treat it as a
-user command: no 133;C after 133;A, and PS1 keeps its 133;P/B wrap
-\(issue #540).  The element is compound (two commands joined by `;')
-because DEBUG fires once per simple command - the guard must match
-each fragment, not just whole elements."
+top level each prompt cycle.  The bash<4.4 DEBUG-trap adapter
+\(forced here on modern bash) must not treat it as a user command:
+no 133;C after 133;A, no disarm, and PS1 keeps its 133;P/B wrap.
+The element is compound (two commands joined by `;') because DEBUG
+fires once per simple command - the guard must match each fragment,
+not just whole elements."
   :tags '(native)
   (skip-unless (executable-find "bash"))
   (skip-unless (ghostel-test--bash-at-least-p 5 1))
@@ -499,12 +805,16 @@ each fragment, not just whole elements."
              " fake_hist_hook() { :; };"
              (format " source %s;" shell-bash)
              " PS1='$ '; PS2='> ';"
+             ghostel-shell-test--force-debug-probe
              " PROMPT_COMMAND+=('fake_hist_hook; fake_sd_hook');"
              ;; Simulate one prompt cycle the way bash runs an array:
              ;; DEBUG fires once per simple command of each element.
              " __ghostel_wrapped_prompt_command;"
              " fake_hist_hook;"
-             " fake_sd_hook"))
+             " fake_sd_hook;"
+             ;; The guard must leave the cycle armed: the next user
+             ;; command still emits its C.
+             " : user-cmd-after-sibling"))
            (process-environment
             (append '("INSIDE_EMACS=ghostel") process-environment))
            (output (with-temp-buffer
@@ -514,18 +824,147 @@ each fragment, not just whole elements."
       ;; The sibling saw the marked PS1 - the DEBUG trap didn't unwrap.
       (should (string-match-p "SIBLINGWRAPPED" output))
       (should-not (string-match-p "SIBLINGUNWRAPPED" output))
-      ;; No 133;C between 133;A and the sibling's output.
-      (let ((a-pos (string-match "\e\\]133;A" output)))
-        (should a-pos)
-        (should-not (string-match-p "\e\\]133;C" (substring output a-pos)))))))
+      ;; No 133;C between 133;A and the sibling's output; the guarded
+      ;; cycle stays armed, so the trailing user command emits one C.
+      (let ((a-pos (string-match "\e\\]133;A" output))
+            (sd-pos (string-match "\e\\]3008;SD" output)))
+        (should (and a-pos sd-pos))
+        (should-not (string-match-p "\e\\]133;C"
+                                    (substring output a-pos sd-pos)))
+        (should (= 1 (ghostel-shell-test--count-occurrences
+                      "\e]133;C" (substring output sd-pos))))))))
 
 (ert-deftest ghostel-test-bash-no-osc133c-before-first-prompt ()
-  "Startup commands after ghostel.bash loads must not emit 133;C.
+  "Startup commands on the sourcing line must not emit 133;C.
 
-DEBUG fires for every top-level command once the trap is installed; a
-startup C has no matching D (the first prompt skips it), leaving
+The C hook reaches PS0 only when the first prompt cycle installs it;
+a startup C would have no matching D, leaving
 `ghostel--command-running' stuck at an idle first prompt.  C must
-still fire normally after the first prompt."
+still fire for the first line typed after the first prompt."
+  :tags '(native)
+  (skip-unless (executable-find "bash"))
+  (skip-unless (ghostel-test--bash-at-least-p 4 4))
+  (let* ((root (or (ghostel--resource-root)
+                   (file-name-directory (locate-library "ghostel"))))
+         (shell-bash (expand-file-name "etc/shell/ghostel.bash" root)))
+    (skip-unless (file-exists-p shell-bash))
+    (let* ((output (ghostel-shell-test--interactive-bash
+                    (list (format "source %s; : startup-top-level-cmd"
+                                  shell-bash)
+                          ": simulated-user-cmd")))
+           (a-pos (string-match "\e\\]133;A" output)))
+      (should a-pos)
+      ;; Nothing before the first prompt emits C.
+      (should-not (string-match-p "\e\\]133;C" (substring output 0 a-pos)))
+      ;; The first typed line after the first prompt emits C, and D
+      ;; closes the cycle.
+      (should (string-match-p "\e\\]133;C" (substring output a-pos)))
+      (should (string-match-p "\e\\]133;D;0" (substring output a-pos))))))
+
+(ert-deftest ghostel-test-bash-compound-line-single-osc133c ()
+  "A compound input line emits exactly one 133;C.
+
+PS0 is expanded once per accepted line, so `: a; : b' must not emit
+a second C mid-line (a mid-line C re-runs
+`ghostel-command-start-functions', resetting per-command state).
+133;D carries each line's final status."
+  :tags '(native)
+  (skip-unless (executable-find "bash"))
+  (skip-unless (ghostel-test--bash-at-least-p 4 4))
+  (let* ((root (or (ghostel--resource-root)
+                   (file-name-directory (locate-library "ghostel"))))
+         (shell-bash (expand-file-name "etc/shell/ghostel.bash" root)))
+    (skip-unless (file-exists-p shell-bash))
+    (let ((output (ghostel-shell-test--interactive-bash
+                   (list (format "source %s" shell-bash)
+                         ": a; : b"
+                         "echo \"l1\nl2\""
+                         ": | cat; false"
+                         "   "))))
+      ;; One C per submitted command: the compound line, the
+      ;; PS2-continued two-physical-line command, the pipeline, and
+      ;; the helper's final `exit'.  The sourcing line and the
+      ;; whitespace-only line emit none.
+      (should (= 4 (ghostel-shell-test--count-occurrences
+                    "\e]133;C" output)))
+      ;; D after each line reports its final command's status.
+      (should (string-match-p "\e\\]133;D;0" output))
+      (should (string-match-p "\e\\]133;D;1" output)))))
+
+(ert-deftest ghostel-test-bash-bind-x-emits-no-osc133c ()
+  "A `bind -x' keystroke at the prompt emits no C on the PS0 path.
+
+PS0 expands only when a complete command line is read, so a handler
+key (fzf style) must not produce a C; the next real command still
+emits its own.
+
+Posix-only: `bind -x' needs readline line editing, which bash
+disables on the pipe that stands in for a PTY on Windows."
+  :tags '(native posix)
+  (skip-unless (executable-find "bash"))
+  (skip-unless (ghostel-test--bash-at-least-p 4 4))
+  (let* ((root (or (ghostel--resource-root)
+                   (file-name-directory (locate-library "ghostel"))))
+         (shell-bash (expand-file-name "etc/shell/ghostel.bash" root)))
+    (skip-unless (file-exists-p shell-bash))
+    (let ((output (ghostel-shell-test--interactive-bash
+                   (list (format "source %s" shell-bash)
+                         "bind -x '\"\\C-t\": echo BOUND-RAN'"
+                         (cons :raw "\C-t")
+                         ": after"))))
+      (should (string-match-p "BOUND-RAN" output))
+      ;; bind line, ": after", and the helper's exit - not the keypress.
+      (should (= 3 (ghostel-shell-test--count-occurrences
+                    "\e]133;C" output))))))
+
+(ert-deftest ghostel-test-bash-user-ps0-preserved ()
+  "The PS0 C-hook install keeps user PS0 content across self-heals.
+
+The hook is appended to an existing PS0, and the promptvars-off
+self-heal strips only the previously installed hook variant, never
+the user's text."
+  :tags '(native)
+  (skip-unless (executable-find "bash"))
+  (skip-unless (ghostel-test--bash-at-least-p 4 4))
+  (let* ((root (or (ghostel--resource-root)
+                   (file-name-directory (locate-library "ghostel"))))
+         (shell-bash (expand-file-name "etc/shell/ghostel.bash" root)))
+    (skip-unless (file-exists-p shell-bash))
+    (let* ((probe
+            (concat
+             (format "source %s;" shell-bash)
+             " PS1='$ '; PS2='> ';"
+             " PS0='USERPS0 ';"
+             " __ghostel_wrapped_prompt_command >/dev/null;"
+             " __ghostel_wrapped_prompt_command >/dev/null;"
+             " shopt -u promptvars;"
+             " __ghostel_wrapped_prompt_command >/dev/null;"
+             " printf '<PS0>%s</PS0>' \"$PS0\""))
+           (process-environment
+            (append '("INSIDE_EMACS=ghostel") process-environment))
+           (output (with-temp-buffer
+                     (call-process "bash" nil (current-buffer) nil
+                                   "--noprofile" "--norc" "-c" probe)
+                     (buffer-string))))
+      (should (string-match "<PS0>\\(\\(?:.\\|\\n\\)*\\)</PS0>" output))
+      (let ((ps0 (match-string 1 output)))
+        ;; User text intact, at the front, exactly once.
+        (should (string-prefix-p "USERPS0 " ps0))
+        (should (= 1 (ghostel-shell-test--count-occurrences "USERPS0" ps0)))
+        ;; The literal C hook installed exactly once; the restore
+        ;; funsub stripped by the promptvars-off self-heal.
+        (should (= 1 (ghostel-shell-test--count-occurrences
+                      "\\e]133;C\\a" ps0)))
+        (should-not (string-search "__ghostel_restore_prompt" ps0))))))
+
+(ert-deftest ghostel-test-bash-debug-trap-fallback-single-osc133c ()
+  "The bash<4.4 DEBUG-trap adapter emits one C per prompt cycle.
+
+Forced on modern bash by installing the configuration the version
+gate selects on bash < 4.4.  DEBUG fires once per simple command, so
+only the first command after arming may emit C; under functrace a
+subshell command must emit none (its disarm cannot reach the parent
+shell) while the next top-level command still emits its own."
   :tags '(native)
   (skip-unless (executable-find "bash"))
   (let* ((root (or (ghostel--resource-root)
@@ -536,25 +975,39 @@ still fire normally after the first prompt."
             (concat
              (format "source %s;" shell-bash)
              " PS1='$ '; PS2='> ';"
-             ;; Simulates `.bashrc' content after the source line.
-             " : startup-top-level-cmd;"
+             ghostel-shell-test--force-debug-probe
+             ;; functrace propagates DEBUG into subshells; enabled
+             ;; while disarmed so it cannot consume a C itself.
+             " builtin set -o functrace;"
              " __ghostel_wrapped_prompt_command;"
-             ;; First command after the first prompt: C must fire.
-             " : simulated-user-cmd;"
-             " __ghostel_wrapped_prompt_command"))
+             ;; Armed: one C for the first simple command only.
+             " : a; : b;"
+             " __ghostel_wrapped_prompt_command;"
+             ;; Re-armed; the subshell's commands must not emit C or
+             ;; disarm (their disarm cannot reach the parent) ...
+             " (: sub1; : sub2);"
+             ;; ... so the next top-level command still emits its C.
+             " : c"))
            (process-environment
             (append '("INSIDE_EMACS=ghostel") process-environment))
            (output (with-temp-buffer
                      (call-process "bash" nil (current-buffer) nil
                                    "--noprofile" "--norc" "-c" probe)
-                     (buffer-string)))
-           (a-pos (string-match "\e\\]133;A" output)))
-      (should a-pos)
-      ;; Nothing before the first prompt emits C.
-      (should-not (string-match-p "\e\\]133;C" (substring output 0 a-pos)))
-      ;; The post-prompt command still emits C, and D closes the cycle.
-      (should (string-match-p "\e\\]133;C" (substring output a-pos)))
-      (should (string-match-p "\e\\]133;D;0" (substring output a-pos))))))
+                     (buffer-string))))
+      (should (= 2 (ghostel-shell-test--count-occurrences
+                    "\e]133;C" output)))
+      (let* ((a1 (string-match "\e\\]133;A" output))
+             (d0 (and a1 (string-match "\e\\]133;D;0" output a1)))
+             (a2 (and d0 (string-match "\e\\]133;A" output d0))))
+        (should (and a1 d0 a2))
+        ;; Nothing before the first prompt emits C.
+        (should-not (string-match-p "\e\\]133;C" (substring output 0 a1)))
+        ;; First cycle: `: a' emits the C, `: b''s status closes it.
+        (should (= 1 (ghostel-shell-test--count-occurrences
+                      "\e]133;C" (substring output a1 d0))))
+        ;; Second cycle: only `: c' emits a C.
+        (should (= 1 (ghostel-shell-test--count-occurrences
+                      "\e]133;C" (substring output a2))))))))
 
 (ert-deftest ghostel-test-zsh-osc7-wins-race-vs-precmd ()
   "Zsh `__ghostel_osc7' must run last among precmd_functions emitters.
@@ -632,14 +1085,67 @@ would) and puts a fake `hostname' on PATH; the integration must emit the fake
                              (call-process "zsh" nil (current-buffer) nil
                                            "-f" "-c" probe)
                              (buffer-string))))
-              ;; Probe emits: \e]7;file://HOST/\a
-              (should (string-match "\e\\]7;file://\\([^/]*\\)/" output))
+              ;; Probe emits: \e]7;kitty-shell-cwd://HOST/\a
+              (should (string-match "\e\\]7;kitty-shell-cwd://\\([^/]*\\)/" output))
               (let ((emitted (match-string 1 output)))
                 ;; Reports gethostname(2) (the fake `hostname'), …
                 (should (equal emitted fake))
                 ;; … not the canonicalized $HOST FQDN.
                 (should-not (equal emitted fqdn)))))
         (delete-directory bindir t)))))
+
+(ert-deftest ghostel-test-bash-osc7-weird-path-round-trip ()
+  "A `#'/`%'/space path survives bash's OSC 7 into `default-directory'."
+  :tags '(posix)
+  (skip-unless (executable-find "bash"))
+  (let* ((root (or (ghostel--resource-root)
+                   (file-name-directory (locate-library "ghostel"))))
+         (shell-bash (expand-file-name "etc/shell/ghostel.bash" root)))
+    (skip-unless (file-exists-p shell-bash))
+    (let* ((base (make-temp-file "ghostel-osc7-" t))
+           (dir (expand-file-name "a b#c%d" base)))
+      (unwind-protect
+          (progn
+            (make-directory dir)
+            (let ((output (with-temp-buffer
+                            (call-process "bash" nil (current-buffer) nil
+                                          "--noprofile" "--norc" "-c"
+                                          (format "cd '%s'; source '%s'; __ghostel_osc7"
+                                                  dir shell-bash))
+                            (buffer-string))))
+              (should (string-match "\e\\]7;\\([^\a]*\\)\a" output))
+              (let ((ghostel--last-directory nil)
+                    (default-directory temporary-file-directory)
+                    list-buffers-directory)
+                (ghostel--update-directory (match-string 1 output))
+                (should (equal (file-name-as-directory dir)
+                               default-directory)))))
+        (delete-directory base t)))))
+
+(ert-deftest ghostel-test-fish-osc7-percent-encodes-path ()
+  "Fish OSC 7 percent-encodes $PWD so `#'/`%'/spaces survive the URI parse."
+  :tags '(:fish posix)
+  (skip-unless (executable-find "fish"))
+  (let* ((root (or (ghostel--resource-root)
+                   (file-name-directory (locate-library "ghostel"))))
+         (shell-fish (expand-file-name "etc/shell/ghostel.fish" root)))
+    (skip-unless (file-exists-p shell-fish))
+    (let* ((base (make-temp-file "ghostel-osc7-" t))
+           (dir (expand-file-name "a b#c%d" base)))
+      (unwind-protect
+          (progn
+            (make-directory dir)
+            (let ((output (with-temp-buffer
+                            (call-process "fish" nil (current-buffer) nil
+                                          "--no-config" "-c"
+                                          (format "cd '%s'; source '%s'; __ghostel_osc7"
+                                                  dir shell-fish))
+                            (buffer-string))))
+              (should (string-match "\e\\]7;file://[^/]*\\(/[^\a]*\\)\a"
+                                    output))
+              (should (string-suffix-p "/a%20b%23c%25d"
+                                       (match-string 1 output)))))
+        (delete-directory base t)))))
 
 (ert-deftest ghostel-test-zsh-line-init-fallback-no-fresh-line ()
   "Use 133;P (not 133;A) in the `zle-line-init' fallback emit.
@@ -1471,6 +1977,49 @@ stubbing `active-minibuffer-window' / `window-buffer' to return it."
        (cl-letf (((symbol-function 'yes-or-no-p)
                   (lambda (_) (ert-fail "unexpected prompt"))))
          (should (ghostel--kill-buffer-query)))))))
+
+(ert-deftest ghostel-test-query-before-exit-names-only-running-buffers ()
+  "The exit query, run outside ghostel, names only buffers with a running command."
+  (ghostel-test--with-cat-process
+   running
+   (ghostel-test--with-cat-process
+    idle
+    (dolist (proc (list running idle))
+      (with-current-buffer (process-buffer proc)
+        (setq major-mode 'ghostel-mode
+              ghostel--process proc
+              ghostel--command-running (eq proc running))))
+    (let ((ghostel-query-before-killing 'auto)
+          asked)
+      (cl-letf (((symbol-function 'yes-or-no-p)
+                 (lambda (prompt) (setq asked prompt) nil)))
+        (with-temp-buffer
+          (should-not (ghostel--kill-emacs-query))
+          (should (string-search (buffer-name (process-buffer running)) asked))
+          (should-not (string-search (buffer-name (process-buffer idle)) asked))))))))
+
+(ert-deftest ghostel-test-query-before-exit-silent-at-prompt ()
+  "Exiting Emacs does not ask when every ghostel buffer sits at a prompt."
+  (ghostel-test--with-cat-process
+   proc
+   (with-current-buffer (process-buffer proc)
+     (setq major-mode 'ghostel-mode
+           ghostel--process proc))
+   (let ((ghostel-query-before-killing 'auto))
+     (cl-letf (((symbol-function 'yes-or-no-p)
+                (lambda (_) (ert-fail "unexpected prompt"))))
+       (should (ghostel--kill-emacs-query))))))
+
+(ert-deftest ghostel-test-osc133-prompt-clears-command-running ()
+  "A prompt marker ends a command that never reported completion."
+  (with-temp-buffer
+    (setq ghostel--command-running t)
+    (ghostel--osc133-marker "A" nil)
+    (should-not ghostel--command-running)))
+
+(ert-deftest ghostel-test-query-before-exit-hook-installed ()
+  "The exit query is registered on `kill-emacs-query-functions'."
+  (should (memq #'ghostel--kill-emacs-query kill-emacs-query-functions)))
 
 (ert-deftest ghostel-test-prompt-navigation ()
   "Test next/previous prompt navigation.

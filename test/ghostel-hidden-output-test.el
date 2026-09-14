@@ -90,7 +90,7 @@ invokes them, so a slow test host cannot change the scheduling assertions."
                    (ghostel--filter
                     process
                     (format "\e]2;hidden-title-%d\a\r\e[2Khidden-value-%d" i i))
-                   (should (equal ghostel--title (format "hidden-title-%d" i)))
+                   (should (equal ghostel-title (format "hidden-title-%d" i)))
                    (should (equal (ghostel-test--row0 ghostel--term)
                                   (format "hidden-value-%d" i)))))))))
       (should (equal (buffer-string) materialized))
@@ -114,7 +114,7 @@ invokes them, so a slow test host cannot change the scheduling assertions."
                     (let ((title (format "event-title-%d" i)))
                       (ghostel--events-filter
                        'pipe (format "(ghostel--set-title %S)" title))
-                      (should (equal ghostel--title title))))))))
+                      (should (equal ghostel-title title))))))))
           (should-not ghostel--event-buf)
           (should ghostel--pending-redraw)
           (should-not ghostel--redraw-timer)
@@ -311,7 +311,7 @@ invokes them, so a slow test host cannot change the scheduling assertions."
       (dolist (title '("first-hidden-title" "latest-hidden-title"))
         (ghostel--events-filter
          process (format "(ghostel--set-title %S)" title))
-        (should (equal ghostel--title title))
+        (should (equal ghostel-title title))
         (should (equal (buffer-name buffer)
                        (format " *ghostel-hidden-title-%s*" title)))
         (should (equal (ghostel--buffer-identification "%t") (list title))))
@@ -338,7 +338,7 @@ invokes them, so a slow test host cannot change the scheduling assertions."
           (should ghostel--pending-redraw)
           (ghostel--events-filter
            process "(ghostel--set-title \"latest-hidden-title\")")
-          (should (equal ghostel--title "latest-hidden-title"))
+          (should (equal ghostel-title "latest-hidden-title"))
           (set-window-buffer window buffer)
           (cl-letf (((symbol-function 'process-send-string)
                      (lambda (target text) (push (cons target text) sent))))

@@ -7,8 +7,8 @@ const gt = @import("ghostty-vt");
 const backend_types = @import("backend_types.zig");
 const emacs = @import("emacs.zig");
 const GhostelHandler = @import("handler.zig").GhostelHandler;
+const GhostelTerm = @import("GhostelTerm.zig");
 const FixedArrayList = @import("fixed_array_list.zig").FixedArrayList;
-const RecursiveMutex = @import("RecursiveMutex.zig");
 
 const Backend = switch (builtin.os.tag) {
     .windows => @import("ConPtyProcess.zig"),
@@ -37,8 +37,7 @@ replica_name: [:0]u8,
 // few writes to Emacs.
 event_buf: FixedArrayList(u8, 16 * 1024) = .{},
 
-term_mutex: RecursiveMutex = .{},
-term: *gt.Terminal,
+owner: *GhostelTerm,
 stream: gt.Stream(GhostelHandler(*Self)),
 
 quit: bool = false,
@@ -48,8 +47,8 @@ const LockedStream = struct {
     process: *Self,
 
     pub fn nextSlice(self: *LockedStream, data: []const u8) !void {
-        try self.process.term_mutex.lock(self.process.io);
-        defer self.process.term_mutex.unlock(self.process.io);
+        try self.process.owner.lock();
+        defer self.process.owner.unlock();
         self.process.stream.nextSlice(data);
     }
 };
@@ -58,19 +57,18 @@ pub fn init(
     self: *Self,
     alloc: Allocator,
     io: std.Io,
-    initial_cols: u16,
-    initial_rows: u16,
+    size: backend_types.WinSize,
     params: ProcessParams,
-    term: *gt.Terminal,
+    owner: *GhostelTerm,
     event_fd: ChannelFd,
 ) !void {
-    var backend = try Backend.init(alloc, io, initial_cols, initial_rows, params);
+    var backend = try Backend.init(alloc, io, size, params);
     errdefer _ = backend.deinitAndWait();
 
     var event_writer = try EventWriter.init(event_fd);
     errdefer event_writer.close();
 
-    var stream: @TypeOf(self.stream) = .initAlloc(alloc, .init(self, term));
+    var stream: @TypeOf(self.stream) = .initAlloc(alloc, .init(alloc, owner, self));
     errdefer stream.deinit();
 
     const replica_name = try alloc.dupeZ(u8, backend.replicaName());
@@ -83,19 +81,11 @@ pub fn init(
         .event_writer = event_writer,
         .pid = backend.pidValue(),
         .replica_name = replica_name,
-        .term = term,
+        .owner = owner,
         .stream = stream,
         .thread = undefined,
     };
     self.thread = try std.Thread.spawn(.{}, Self.run, .{self});
-}
-
-pub fn lockTerm(self: *Self) !void {
-    try self.term_mutex.lock(self.io);
-}
-
-pub fn unlockTerm(self: *Self) void {
-    self.term_mutex.unlock(self.io);
 }
 
 pub const WriteOutcome = enum {
@@ -183,11 +173,11 @@ fn checkEmacsQuit(context: *const anyopaque) !void {
     try env.checkQuit();
 }
 
-pub fn resizePty(self: *Self, cols: u16, rows: u16) !void {
+pub fn resizePty(self: *Self, size: backend_types.WinSize) !void {
     try self.backend_handoff_mutex.lock(self.io);
     defer self.backend_handoff_mutex.unlock(self.io);
 
-    if (self.backend) |*backend| try backend.resize(cols, rows);
+    if (self.backend) |*backend| try backend.resize(size);
 }
 
 pub fn effect(self: *Self, comptime func: []const u8, args: anytype) void {

@@ -33,20 +33,15 @@ systems or for terminals you know won't display images."
 (defcustom ghostel-kitty-graphics-mediums nil
   "Image-loading mediums to enable for the Kitty graphics protocol.
 
-The kitty protocol supports four ways for a program to ship image
-data to the terminal:
-- direct: base64-encoded inline (always enabled, what timg / yazi use)
-- file: program names a local file, terminal reads it
-- temp-file: program names a temp file, terminal reads and unlinks it
-- shared-mem: program names a POSIX shared-memory region
+The direct medium (base64 inline, used by timg and yazi) is always
+enabled.  The others let the program name data on the local machine:
+- file: a local file, read by the terminal (broot PNG previews)
+- temp-file: a temp file, read and unlinked (broot, ranger)
+- shared-mem: a POSIX shared-memory region
 
-The non-direct mediums let a *remote* program (over SSH, tmux
-passthrough, etc.) instruct ghostel to read arbitrary paths or shared
-memory regions on the local machine — a privilege-escalation surface.
-The default is nil (none enabled), keeping ghostel safe in remote
-sessions while still supporting timg, yazi, and other tools that ship
-data inline.  Enable individual mediums by adding `file', `temp-file',
-or `shared-mem' to the list, e.g. `(file)' for trusted local-only use."
+The default accepts inline data only.  When other mediums are enabled,
+a program running remotely \(SSH, tmux passthrough) can make ghostel
+read local files or shared memory.  Enable them only for trusted use."
   :type '(set (const :tag "Local file medium" file)
               (const :tag "Temp-file medium" temp-file)
               (const :tag "Shared-memory medium" shared-mem))

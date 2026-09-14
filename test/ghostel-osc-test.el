@@ -55,11 +55,165 @@
           (ghostel--write-pty ghostel--term (format "\e]2;%s\e\\" title))
           (ghostel-test--wait-until
            (lambda ()
-             (and (equal title ghostel--title)
+             (and (equal title ghostel-title)
                   (equal expected (buffer-name))))
            proc 5)
-          (should (equal title ghostel--title))
+          (should (equal title ghostel-title))
           (should (equal expected (buffer-name))))))))
+
+(ert-deftest ghostel-test-osc2-empty-title-clears ()
+  "An empty OSC 0/2 clears the title and reverts the tracked buffer name.
+Covers OSC 2 with ST and BEL terminators and the OSC 0 form."
+  :tags '(native)
+  (let ((ghostel-buffer-name-function #'ghostel-buffer-name-by-title))
+    (ghostel-test--with-pty-matrix backend
+      (ghostel-test--with-raw-echo-buffer (buf proc)
+        (let ((expected ghostel--initial-name)
+              (round 0))
+          (should (equal expected (buffer-name)))
+          (dolist (clear '("\e]2;\e\\" "\e]2;\a" "\e]0;\a"))
+            (let ((title (format "Clear Me %S %d" backend
+                                 (setq round (1+ round)))))
+              (ghostel--write-pty ghostel--term (format "\e]2;%s\e\\" title))
+              (ghostel-test--wait-until
+               (lambda () (equal title ghostel-title)) proc 5)
+              (should (equal (format "*ghostel: %s*" title) (buffer-name)))
+              (ghostel--write-pty ghostel--term clear)
+              (ghostel-test--wait-until
+               (lambda () (null ghostel-title)) proc 5)
+              (should (null ghostel-title))
+              (should (equal expected (buffer-name)))
+              (should (equal expected ghostel--managed-buffer-name)))))))))
+
+(ert-deftest ghostel-test-full-reset-clears-title ()
+  "RIS clears the title and reverts the tracked buffer name."
+  :tags '(native)
+  (let ((ghostel-buffer-name-function #'ghostel-buffer-name-by-title))
+    (ghostel-test--with-pty-matrix backend
+      (ghostel-test--with-raw-echo-buffer (buf proc)
+        (let ((expected ghostel--initial-name)
+              (title (format "RIS Stale %S" backend)))
+          (ghostel--write-vt ghostel--term (format "\e]2;%s\e\\" title))
+          (ghostel-test--wait-until
+           (lambda () (equal title ghostel-title)) proc 5)
+          (should (equal (format "*ghostel: %s*" title) (buffer-name)))
+          (ghostel--write-vt ghostel--term "\ec")
+          (ghostel-test--wait-until
+           (lambda () (null ghostel-title)) proc 5)
+          (should (equal expected (buffer-name)))
+          (should (equal expected ghostel--managed-buffer-name)))))))
+
+(ert-deftest ghostel-test-full-reset-without-title-skips-callback ()
+  "RIS with no title does not invoke `ghostel--set-title'."
+  :tags '(native)
+  (ghostel-test--with-pty-matrix backend
+    (ghostel-test--with-raw-echo-buffer (buf proc)
+      (let* ((calls 0)
+             (orig (symbol-function 'ghostel--set-title)))
+        (cl-letf (((symbol-function 'ghostel--set-title)
+                   (lambda (title)
+                     (setq calls (1+ calls))
+                     (funcall orig title))))
+          (ghostel--write-vt ghostel--term "\ec\e]2;SENTINEL\e\\")
+          ;; Effects are FIFO, so observing SENTINEL drains any RIS callback.
+          (ghostel-test--wait-until
+           (lambda () (equal "SENTINEL" ghostel-title)) proc 5)
+          (should (equal 1 calls)))))))
+
+(ert-deftest ghostel-test-title-stack-restores-title ()
+  "CSI 22/23 t saves and restores the window title."
+  :tags '(native)
+  (ghostel-test--with-pty-matrix backend
+    (ghostel-test--with-raw-echo-buffer (buf proc)
+      (let ((outer (format "Outer %S" backend))
+            (inner (format "Inner %S" backend)))
+        (ghostel--write-vt ghostel--term (format "\e]2;%s\e\\" outer))
+        (ghostel-test--wait-until
+         (lambda () (equal outer ghostel-title)) proc 5)
+        (ghostel--write-vt ghostel--term
+                           (format "\e[22;0t\e]2;%s\e\\" inner))
+        (ghostel-test--wait-until
+         (lambda () (equal inner ghostel-title)) proc 5)
+        (ghostel--write-vt ghostel--term "\e[23;0t")
+        (ghostel-test--wait-until
+         (lambda () (equal outer ghostel-title)) proc 5)
+        ;; Push again to verify that pop restored terminal state as well as Elisp state.
+        (ghostel--write-vt ghostel--term "\e[22;0t\e]2;transient\e\\\e[23;0t")
+        (ghostel-test--wait-until
+         (lambda () (equal outer ghostel-title)) proc 5)))))
+
+(ert-deftest ghostel-test-title-stack-drops-push-when-full ()
+  "Pushes beyond xterm's 10-entry title stack limit are dropped."
+  :tags '(native)
+  (ghostel-test--with-pty-matrix backend
+    (ghostel-test--with-raw-echo-buffer (buf proc)
+      ;; The 11th push exceeds the limit.
+      (dotimes (i 11)
+        (ghostel--write-vt ghostel--term
+                           (format "\e]2;T%d\e\\\e[22;0t" i)))
+      (ghostel--write-vt ghostel--term "\e]2;final\e\\\e[23;0t")
+      (ghostel-test--wait-until
+       (lambda () (equal "T9" ghostel-title)) proc 5)
+      (dotimes (_ 9)
+        (ghostel--write-vt ghostel--term "\e[23;0t"))
+      (ghostel-test--wait-until
+       (lambda () (equal "T0" ghostel-title)) proc 5))))
+
+(ert-deftest ghostel-test-title-stack-restores-no-title ()
+  "Vim's push/set/pop sequence restores an unset title."
+  :tags '(native)
+  (ghostel-test--with-pty-matrix backend
+    (ghostel-test--with-raw-echo-buffer (buf proc)
+      ;; Vim also saves the icon title; the parser drops those forms.
+      (ghostel--write-vt ghostel--term
+                         (concat "\e[22;2t\e[22;1t"
+                                 "\e]2;file +  - VIM\a"
+                                 "\e]2;Thanks for flying Vim\a"))
+      (ghostel-test--wait-until
+       (lambda () (equal "Thanks for flying Vim" ghostel-title)) proc 5)
+      (ghostel--write-vt ghostel--term "\e[23;2t\e[23;1t")
+      (ghostel-test--wait-until
+       (lambda () (null ghostel-title)) proc 5))))
+
+(ert-deftest ghostel-test-title-stack-empty-pop-is-no-op ()
+  "Popping an empty title stack leaves the title unchanged."
+  :tags '(native)
+  (ghostel-test--with-pty-matrix backend
+    (ghostel-test--with-raw-echo-buffer (buf proc)
+      (ghostel--write-vt ghostel--term "\e]2;KEEP\e\\\e[23;0t")
+      (ghostel-test--wait-until
+       (lambda () (equal "KEEP" ghostel-title)) proc 5))))
+
+(ert-deftest ghostel-test-title-stack-indexed-operations-are-no-ops ()
+  "Indexed title stack operations leave the default stack unchanged."
+  :tags '(native)
+  (ghostel-test--with-pty-matrix backend
+    (ghostel-test--with-raw-echo-buffer (buf proc)
+      ;; Try indexed push 5, set the title to IDX, then perform a default pop.
+      ;; Since the indexed push is ignored, the pop has nothing to restore.
+      (ghostel--write-vt ghostel--term "\e[22;0;5t\e]2;IDX\e\\\e[23;0t")
+      (ghostel-test--wait-until
+       (lambda () (equal "IDX" ghostel-title)) proc 5)
+      ;; Push IDX onto the default stack, set the title to AFTER, then try
+      ;; indexed pop 5.  The indexed pop leaves AFTER displayed and IDX saved.
+      (ghostel--write-vt ghostel--term
+                         "\e[22;0t\e]2;AFTER\e\\\e[23;0;5t")
+      (ghostel-test--wait-until
+       (lambda () (equal "AFTER" ghostel-title)) proc 5)
+      ;; A default pop restores IDX, proving that indexed pop 5 did not consume it.
+      (ghostel--write-vt ghostel--term "\e[23;0t")
+      (ghostel-test--wait-until
+       (lambda () (equal "IDX" ghostel-title)) proc 5))))
+
+(ert-deftest ghostel-test-full-reset-clears-title-stack ()
+  "RIS discards saved title stack entries."
+  :tags '(native)
+  (ghostel-test--with-pty-matrix backend
+    (ghostel-test--with-raw-echo-buffer (buf proc)
+      (ghostel--write-vt ghostel--term
+                         "\e]2;BEFORE\e\\\e[22;0t\ec\e]2;AFTER\e\\\e[23;0t")
+      (ghostel-test--wait-until
+       (lambda () (equal "AFTER" ghostel-title)) proc 5))))
 
 (ert-deftest ghostel-test-osc9-notification ()
   "OSC 9 iTerm2-style notifications reach `ghostel-notification-function'."
@@ -208,6 +362,22 @@ ConEmu's CWD-reporting alias uses the same callback as OSC 7, so
           (ghostel--write-pty ghostel--term payload)
           (ghostel-test--wait-until (lambda () calls) proc 5)
           (should (equal (list expected) calls)))))))
+
+(ert-deftest ghostel-test-full-reset-clears-progress ()
+  "RIS dispatches a progress removal."
+  :tags '(native)
+  (ghostel-test--with-pty-matrix backend
+    (ghostel-test--with-raw-echo-buffer (buf proc)
+      (let* ((calls nil)
+             (ghostel-progress-function
+              (lambda (state progress) (push (list state progress) calls))))
+        (ghostel--write-vt ghostel--term "\e]9;4;1;50\e\\")
+        (ghostel-test--wait-until (lambda () calls) proc 5)
+        (should (equal '((set 50)) calls))
+        (setq calls nil)
+        (ghostel--write-vt ghostel--term "\ec")
+        (ghostel-test--wait-until (lambda () calls) proc 5)
+        (should (equal '((remove nil)) calls))))))
 
 (ert-deftest ghostel-test-osc-progress-dispatch ()
   "`ghostel--osc-progress' converts the state string to a symbol."
@@ -689,6 +859,53 @@ fresh."
                             (:equal (should (equal arg reply)))
                             (:match (should (string-match-p arg reply))))))))))))
 
+(ert-deftest ghostel-test-csi996-reports-light-and-dark ()
+  "A child's CSI ? 996 n gets 997;1 for a dark default background, 997;2 for light."
+  :tags '(native)
+  (ghostel-test--with-pty-matrix backend
+    (dolist (case '((dark . "1b5b3f3939373b316e") (light . "1b5b3f3939373b326e")))
+      (ghostel-test--with-exec-buffer
+          (buf proc (ghostel-test--python)
+               (list "-c" ghostel-test--pty-reply-probe-script
+                     (ghostel-test--fixture-directory) "0.15"
+                     (ghostel-test--hex-encode-string "\e[?996n")))
+        (ghostel--set-default-colors ghostel--term "#eeeeee" "#111111" (car case))
+        (should (equal (cdr case) (ghostel-test--wait-for-pty-reply 0 proc 6)))))))
+
+(ert-deftest ghostel-test-csi996-ignores-osc11-override ()
+  "A child OSC 11 override does not change the CSI ? 996 n answer."
+  :tags '(native)
+  (ghostel-test--with-pty-matrix backend
+    (should (equal "1b5b3f3939373b326e"
+                   (ghostel-test--record-pty-bytes
+                    9 (lambda ()
+                        (ghostel--set-default-colors ghostel--term "#111111" "#f7f3fa" 'light)
+                        (ghostel--write-vt ghostel--term "\e]11;#111111\e\\\e[?996n")))))))
+
+(ert-deftest ghostel-test-mode-2031-off-does-not-push-997 ()
+  "Without Mode 2031, a dark→light re-seed pushes nothing ahead of the query's own answer."
+  :tags '(native)
+  (ghostel-test--with-pty-matrix backend
+    (should (equal "1b5b3f3939373b326e"
+                   (ghostel-test--record-pty-bytes
+                    9 (lambda ()
+                        (ghostel--set-default-colors ghostel--term "#eeeeee" "#111111" 'dark)
+                        (ghostel--set-default-colors ghostel--term "#111111" "#f7f3fa" 'light)
+                        (ghostel--write-vt ghostel--term "\e[?996n")))))))
+
+(ert-deftest ghostel-test-mode-2031-pushes-997-on-scheme-change ()
+  "With Mode 2031 enabled, a 997 is pushed once per scheme change, not per re-seed."
+  :tags '(native)
+  (ghostel-test--with-pty-matrix backend
+    (should (equal "1b5b3f3939373b326e1b5b3f3939373b316e"
+                   (ghostel-test--record-pty-bytes
+                    18 (lambda ()
+                         (ghostel--set-default-colors ghostel--term "#eeeeee" "#111111" 'dark)
+                         (ghostel--write-vt ghostel--term "\e[?2031h")
+                         (ghostel--set-default-colors ghostel--term "#111111" "#f7f3fa" 'light)
+                         (ghostel--set-default-colors ghostel--term "#111111" "#fafafa" 'light)
+                         (ghostel--set-default-colors ghostel--term "#eeeeee" "#111111" 'dark)))))))
+
 (ert-deftest ghostel-test-osc52-eval ()
   "Test that OSC 52;e dispatches to whitelisted functions."
   (let* ((called-with nil)
@@ -981,6 +1198,19 @@ Downstream consumers (notably `ghostel-compile') depend on it."
            (list (lambda (_b) (setq ran t)))))
       (ghostel--osc133-marker "C" nil)
       (should ran))))
+
+(ert-deftest ghostel-test-tty-forward-notify ()
+  "`ghostel-tty-forward-notify' re-emits OSC 9 / OSC 777 on a tty frame."
+  (let (sent)
+    (cl-letf (((symbol-function 'tty-type) (lambda (&optional _) "xterm"))
+              ((symbol-function 'send-string-to-terminal)
+               (lambda (string &optional terminal)
+                 (push (cons string terminal) sent))))
+      (ghostel-tty-forward-notify "" "Hello world")
+      (ghostel-tty-forward-notify "Subject" "Body text")
+      (should (equal `(("\e]777;notify;Subject;Body text\e\\" . ,(selected-frame))
+                       ("\e]9;Hello world\e\\" . ,(selected-frame)))
+                     sent)))))
 
 (provide 'ghostel-osc-test)
 ;;; ghostel-osc-test.el ends here
