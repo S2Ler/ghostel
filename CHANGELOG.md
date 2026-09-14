@@ -13,6 +13,11 @@ All notable changes to this project will be documented in this file.
   (`C-x C-c`): one prompt listing every ghostel buffer with a running command
   (`auto`, needs OSC 133 shell integration) or a live process (`t`).
 
+### Changed
+- `ghostel-kitty-graphics-mediums` defaults to all mediums, as in Ghostty and
+  kitty, so broot and ranger previews work without configuration.  Set it to
+  nil to accept inline image data only.
+
 ### Fixed
 - The native PTY's window size (`TIOCGWINSZ`) carries the cell pixel
   geometry, so image tools that size kitty graphics from it (broot,

@@ -919,10 +919,6 @@ Wayland with fractional scaling or non-standard DPI), set an explicit number.
   placements that coexist in the same buffer are rendered as a single image; the
   most recent transmission wins.  =yazi='s preview pane uses one image at a time,
   so this has not been a problem in practice.
-- *Non-direct mediums are off by default* for safety.  Only the inline (base64)
-  medium is enabled; file / temp-file / shared-memory mediums are opt-in via
-  =ghostel-kitty-graphics-mediums=.  See its docstring for the
-  privilege-escalation reasoning.
 
 ** Calling Elisp from the shell
 :properties:
@@ -1405,7 +1401,7 @@ tables below group them by area; defaults shown are the out-of-the-box values.
 | Variable                             | Default | Description                                                                               |
 |--------------------------------------+---------+-------------------------------------------------------------------------------------------|
 | =ghostel-kitty-graphics-storage-limit= | 320 MiB | Per-terminal cap on kitty graphics storage.  0 disables kitty graphics entirely.          |
-| =ghostel-kitty-graphics-mediums=       | =nil=     | Opt-in image-loading mediums beyond inline base64: subset of =(file temp-file shared-mem)=. |
+| =ghostel-kitty-graphics-mediums=       | all       | Image-loading mediums beyond inline base64, subset of =(file temp-file shared-mem)=; nil accepts inline data only. |
 
 ** Links, clipboard, and detection
 

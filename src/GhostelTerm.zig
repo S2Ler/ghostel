@@ -413,9 +413,6 @@ pub const emacs_functions = [_]emacs.FunctionEntry{
         .impl = struct {
             pub fn call(env: emacs.Env, nargs: isize, args: [*c]emacs.Value) !emacs.Value {
                 // Bit 0 = file medium, bit 1 = temp_file, bit 2 = shared_mem.
-                // Default 0 — only the direct medium (base64 inline) is enabled.
-                // The other mediums let a remote program instruct ghostel to read
-                // arbitrary local files / SHM regions, so opt-in only.
                 const kitty_mediums: u32 = if (nargs > 4 and env.isNotNil(args[4]))
                     (std.math.cast(u32, env.cast(i64, args[4])) orelse 0)
                 else
