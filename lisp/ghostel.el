@@ -843,6 +843,13 @@ to nil to disable the regex fallback entirely (OSC 133 only)."
 (declare-function ghostel--write-vt "ghostel-module")
 (declare-function ghostel--write-pty "ghostel-module")
 (declare-function ghostel--pty-password-input-p "ghostel-module" (term))
+(declare-function ghostel--terminal-control-api-version "ghostel-module" ())
+(declare-function ghostel--terminal-control-native-process-p "ghostel-module"
+                  (term pid))
+(declare-function ghostel--terminal-snapshot-tail "ghostel-module"
+                  (term max-lines max-utf8-bytes))
+(declare-function ghostel--terminal-control-input "ghostel-module"
+                  (term kind text-or-key modifiers))
 (declare-function ghostel--spawn-native-process "ghostel-module" (term command pipe))
 (declare-function ghostel--kill-native-process "ghostel-module" (term))
 
@@ -1772,6 +1779,155 @@ byte is accepted by the selected local transport."
   (ghostel--on-user-input)
   (ghostel--paste-text string require-bracketed))
 
+(defconst ghostel-terminal-control-api-version 1
+  "Version of the public snapshot and receipt-bearing input contract.")
+
+(defun ghostel-terminal-control-capabilities ()
+  "Return the capabilities of the matching, already loaded native module.
+The plist contains independent `:snapshot-tail' and `:input-receipts'
+flags.  Return nil when Elisp and native API versions do not match.
+This probe never loads or replaces a module."
+  (condition-case nil
+      (when (and (featurep 'ghostel-module)
+                 (fboundp 'ghostel--terminal-control-api-version)
+                 (fboundp 'ghostel--terminal-control-native-process-p)
+                 (eql ghostel-terminal-control-api-version
+                      (ghostel--terminal-control-api-version)))
+        (list :api-version ghostel-terminal-control-api-version
+              :native-api-version ghostel-terminal-control-api-version
+              :snapshot-tail (fboundp 'ghostel--terminal-snapshot-tail)
+              :input-receipts (fboundp 'ghostel--terminal-control-input)))
+    ((error quit) nil)))
+
+(defun ghostel--terminal-control-live-p ()
+  "Return non-nil for the current buffer's exact bound live terminal."
+  (and (eq major-mode 'ghostel-mode)
+       (user-ptrp ghostel--term)
+       (processp ghostel--process)
+       (process-live-p ghostel--process)
+       (eq (process-buffer ghostel--process) (current-buffer))
+       (eq (process-get ghostel--process 'ghostel--terminal-control-term)
+           ghostel--term)
+       (let ((native-pid (process-get ghostel--process 'ghostel--native-pid)))
+         (or (null native-pid)
+             (and (integerp native-pid)
+                  (ghostel--terminal-control-native-process-p
+                   ghostel--term native-pid))))))
+
+(defun ghostel-terminal-snapshot-tail (max-lines max-utf8-bytes)
+  "Return bounded native terminal text and metadata for the current buffer.
+MAX-LINES must be 1 through 1000.  MAX-UTF8-BYTES must be 1 through
+98304.  The newest suffix wins, including a partial first line when
+needed.  Success is a plist with `:outcome' equal to `ok'.  Failure
+is `not-executed' with an `unavailable' or `internal-error' reason.
+This function does not render, move point, or include a line-mode draft."
+  (condition-case nil
+      (cond
+       ((not (and (plist-get (ghostel-terminal-control-capabilities)
+                             :snapshot-tail)
+                  (ghostel--terminal-control-live-p)))
+        '(:outcome not-executed :reason unavailable))
+       ((not (and (integerp max-lines) (<= 1 max-lines 1000)
+                  (integerp max-utf8-bytes) (<= 1 max-utf8-bytes 98304)))
+        '(:outcome not-executed :reason internal-error))
+       (t (ghostel--terminal-snapshot-tail
+           ghostel--term max-lines max-utf8-bytes)))
+    ((error quit) '(:outcome not-executed :reason internal-error))))
+
+(defun ghostel--terminal-control-text (text paste)
+  "Return valid scalar TEXT, or nil when it exceeds the input contract.
+PASTE permits TAB and LF.  The byte count uses scalar widths so the
+native call can perform the one UTF-8 encoding sent to the transport."
+  (when (and (stringp text) (<= 1 (length text) 65536))
+    (let* ((text (if (multibyte-string-p text)
+                     text
+                   (decode-coding-string text 'utf-8-unix)))
+           (index 0)
+           (bytes 0)
+           (valid t))
+      (while (and valid (< index (length text)))
+        (let ((char (aref text index)))
+          (setq valid (and (<= char #x10ffff)
+                           (not (<= #xd800 char #xdfff))
+                           (not (<= #x7f char #x9f))
+                           (or (>= char 32)
+                               (and paste (memq char '(9 10)))))
+                bytes (+ bytes (cond ((< char #x80) 1)
+                                     ((< char #x800) 2)
+                                     ((< char #x10000) 3)
+                                     (t 4)))
+                index (1+ index))
+          (when (> bytes 65536) (setq valid nil))))
+      (and valid text))))
+
+(defvar ghostel--password-mode-p)
+
+(defun ghostel--terminal-control-input-reason ()
+  "Return a refusal reason, or nil when terminal input can proceed."
+  (cond
+   ((not (and (plist-get (ghostel-terminal-control-capabilities) :input-receipts)
+              (ghostel--terminal-control-live-p))) 'unavailable)
+   ((eq ghostel--input-mode 'line) 'line-mode)
+   ((or ghostel--password-mode-p
+        (condition-case nil
+            (ghostel--pty-password-input-p ghostel--term)
+          ((error quit) nil)))
+    'sensitive-input)))
+
+(defun ghostel--terminal-control-call (kind text-or-key modifiers)
+  "Enter the native control API once for KIND, TEXT-OR-KEY and MODIFIERS."
+  (let ((entered nil))
+    (condition-case nil
+        (let ((reason (ghostel--terminal-control-input-reason)))
+          (if reason
+              (list :outcome 'not-executed :reason reason)
+            (setq entered t)
+            (ghostel--terminal-control-input
+             ghostel--term kind text-or-key modifiers)))
+      ((error quit)
+       (list :outcome (if entered 'uncertain 'not-executed)
+             :reason 'internal-error)))))
+
+(defun ghostel-terminal-control-type (text)
+  "Offer TEXT as UTF-8 to the current terminal without appending Return.
+TEXT contains 1 through 65536 bytes of Unicode scalar text, with no
+C0, DEL or C1 controls.  Return `accepted-locally' and `:utf8-bytes'
+only after the local transport accepts the complete encoding.
+Other outcomes are `not-executed', `not-written', and `uncertain',
+with a bounded symbol reason.  Never retry an uncertain result."
+  (let ((text (ghostel--terminal-control-text text nil)))
+    (if text
+        (ghostel--terminal-control-call 'type text "")
+      '(:outcome not-executed :reason invalid-input))))
+
+(defun ghostel-terminal-control-paste (text)
+  "Offer TEXT as one strict bracketed-paste transaction without Return.
+TEXT follows `ghostel-terminal-control-type', but TAB and LF are
+allowed.  Without bracketed paste, return `not-written'.  An accepted
+receipt counts the UTF-8 payload and bracketed-paste framing bytes."
+  (let ((text (ghostel--terminal-control-text text t)))
+    (if text
+        (ghostel--terminal-control-call 'paste text "")
+      '(:outcome not-executed :reason invalid-input))))
+
+(defun ghostel-terminal-control-key (key-name modifiers)
+  "Send semantic KEY-NAME with MODIFIERS through the terminal key encoder.
+KEY-NAME has 1 through 64 lowercase ASCII letters, digits or hyphens.
+MODIFIERS is a proper, duplicate-free list of `shift', `alt', and
+`ctrl'.  Use \"return\" with nil modifiers to submit once.
+Unknown or unencodable keys return `not-written' and `key-unencodable'.
+Accepted receipts count the complete terminal encoding in bytes."
+  (let ((case-fold-search nil))
+    (if (and (stringp key-name) (<= 1 (length key-name) 64)
+             (string-match-p "\\`[a-z0-9-]+\\'" key-name)
+             (proper-list-p modifiers) (<= (length modifiers) 3)
+             (cl-every (lambda (modifier) (memq modifier '(shift alt ctrl)))
+                       modifiers)
+             (= (length modifiers) (length (delete-dups (copy-sequence modifiers)))))
+        (ghostel--terminal-control-call
+         'key key-name (mapconcat #'symbol-name modifiers ","))
+      '(:outcome not-executed :reason invalid-input))))
+
 
 ;;; Terminal control commands (C-c prefix)
 
@@ -2331,8 +2487,7 @@ the prompt."
 
 ;;; Mode line
 
-(defvar ghostel--password-mode-p)         ; forward decls; defined below.
-(defvar ghostel--password-handled-cursor) ;
+(defvar ghostel--password-handled-cursor)
 
 (defvar-local ghostel--mode-line-tag nil
   "Current input-mode label rendered in `mode-line-process'.
@@ -4178,7 +4333,8 @@ TRAMP can manage the remote shell."
                       (ghostel--spawn-via-native (cons program program-args))
                     (ghostel--spawn-via-emacs program program-args remote-p))))
     (when (processp process)
-      (process-put process 'adjust-window-size-function #'ignore))
+      (process-put process 'adjust-window-size-function #'ignore)
+      (process-put process 'ghostel--terminal-control-term ghostel--term))
     (setq ghostel--process process)
     (ghostel--sync-read-only)
     process))

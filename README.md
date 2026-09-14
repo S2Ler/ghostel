@@ -4,6 +4,8 @@ This is the `perf/many-tuis` branch of [S2Ler/ghostel](https://github.com/S2Ler/
 with upstream 0.53.0 and subsequent fixes. It preserves strict-paste receipts,
 reduces window searches for hidden terminals, and protects minibuffer height
 during redraw. Parsing and title updates continue while a terminal is hidden.
+The public terminal-control API provides bounded snapshots and input receipts
+for Agentd and other terminal clients.
 
 Use this Elpaca recipe to select the branch:
 
@@ -13,7 +15,7 @@ Use this Elpaca recipe to select the branch:
 ```
 
 Build the native module from this branch with `make build`. Upstream release
-binaries do not provide its strict-paste contract. The upstream documentation
+binaries do not provide its strict-paste or terminal-control contracts. The upstream documentation
 and installation examples follow below.
 
 [![MELPA](https://melpa.org/packages/ghostel-badge.svg)](https://melpa.org/#/ghostel)
