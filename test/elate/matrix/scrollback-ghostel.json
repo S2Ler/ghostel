@@ -1,0 +1,188 @@
+{
+  "name": "scrollback-ghostel",
+  "comment": "Scrollback bookkeeping against the native module: eviction keeps the newest rows (retention is floored at ~2 standard pages), a DECSTBM region scroll keeps materialized scrollback, a wrapped line rejoins after a widening resize, and a DECCOLM 80/132 round trip keeps scrollback and the column count. Never runs clear(1): it sends CSI 3 J which erases scrollback.",
+  "session": {
+    "ui": "tty",
+    "size": "60x24",
+    "config": "minimal",
+    "eval": [
+      "(load \"/Users/daniel/.emacs.d/lib/ghostel/test/elate/lib/ghostel-setup.el\")",
+      "(setq ghostel-shell \"/opt/homebrew/bin/bash\" ghostel-max-scrollback 65536)"
+    ]
+  },
+  "steps": [
+    {
+      "eval": "(ghostel)"
+    },
+    {
+      "wait": "text",
+      "pattern": "\\$ $",
+      "buffer": "*ghostel*",
+      "timeout": 15
+    },
+    {
+      "eval": "(ghostel-send-string \"PS1='$ '\\n\")"
+    },
+    {
+      "wait": "idle",
+      "min_idle": 0.8,
+      "timeout": 10
+    },
+    {
+      "group": "evict",
+      "comment": "5000 rows exceed the retained window: oldest gone, newest kept, buffer bounded"
+    },
+    {
+      "eval": "(ghostel-send-string \"seq 1 5000; echo s1-done\\n\")"
+    },
+    {
+      "wait": "text",
+      "pattern": "s1-done",
+      "buffer": "*ghostel*",
+      "timeout": 30
+    },
+    {
+      "wait": "until",
+      "pred": "(ghostel-elate--has-line \"\\\\$ \")",
+      "buffer": "*ghostel*",
+      "timeout": 10
+    },
+    {
+      "wait": "idle",
+      "min_idle": 1.0,
+      "timeout": 10
+    },
+    {
+      "assert": {
+        "eval": "(and (ghostel-elate--has-line \"5000\") (not (ghostel-elate--has-line \"1\")) (< 24 (count-lines (point-min) (point-max)) 2500))",
+        "buffer": "*ghostel*"
+      }
+    },
+    {
+      "group": "region-scroll",
+      "comment": "scrolling inside a DECSTBM region keeps rows already in scrollback"
+    },
+    {
+      "eval": "(ghostel-elate--vt \"\u001b[5;10r\u001b[5;1H\" \"s2-start\")"
+    },
+    {
+      "wait": "text",
+      "pattern": "s2-start",
+      "buffer": "*ghostel*",
+      "timeout": 10
+    },
+    {
+      "eval": "(ghostel-send-string \"seq 1 30\\n\")"
+    },
+    {
+      "wait": "idle",
+      "min_idle": 1.0,
+      "timeout": 10
+    },
+    {
+      "eval": "(ghostel-elate--vt \"\u001b[r\u001b[24;1H\" \"s2-done\")"
+    },
+    {
+      "wait": "text",
+      "pattern": "s2-done",
+      "buffer": "*ghostel*",
+      "timeout": 10
+    },
+    {
+      "wait": "idle",
+      "min_idle": 1.0,
+      "timeout": 10
+    },
+    {
+      "assert": {
+        "eval": "(and (ghostel-elate--has-line \"4000\") (< 100 (count-lines (point-min) (point-max))))",
+        "buffer": "*ghostel*"
+      }
+    },
+    {
+      "group": "wrap-join",
+      "comment": "a 90-char line wraps at 60 cols and rejoins at 100"
+    },
+    {
+      "eval": "(ghostel-send-string \"printf '%090d\\\\n' 0; echo s3-done\\n\")"
+    },
+    {
+      "wait": "text",
+      "pattern": "s3-done",
+      "buffer": "*ghostel*",
+      "timeout": 10
+    },
+    {
+      "wait": "idle",
+      "min_idle": 0.5,
+      "timeout": 10
+    },
+    {
+      "assert": {
+        "eval": "(and (ghostel-elate--has-line \"0\\\\{50,60\\\\}\") (not (ghostel-elate--has-line \"0\\\\{90\\\\}\")))",
+        "buffer": "*ghostel*"
+      }
+    },
+    {
+      "resize": "100x24"
+    },
+    {
+      "wait": "idle",
+      "min_idle": 1.5,
+      "timeout": 10
+    },
+    {
+      "assert": {
+        "eval": "(and (ghostel-elate--has-line \"0\\\\{90\\\\}\") (ghostel-elate--has-line \"4000\"))",
+        "buffer": "*ghostel*"
+      }
+    },
+    {
+      "group": "deccolm",
+      "comment": "DECCOLM on/off clears the screen but keeps scrollback and the column count"
+    },
+    {
+      "eval": "(setq ghostel-elate--cols ghostel--term-cols)"
+    },
+    {
+      "eval": "(ghostel-elate--vt \"\u001b[?40h\u001b[?3h\" \"s4-on\")"
+    },
+    {
+      "wait": "text",
+      "pattern": "s4-on",
+      "buffer": "*ghostel*",
+      "timeout": 10
+    },
+    {
+      "wait": "idle",
+      "min_idle": 1.0,
+      "timeout": 10
+    },
+    {
+      "assert": {
+        "eval": "(and (ghostel-elate--has-line \"4000\") (= ghostel--term-cols ghostel-elate--cols))",
+        "buffer": "*ghostel*"
+      }
+    },
+    {
+      "eval": "(ghostel-elate--vt \"\u001b[?3l\" \"s4-off\")"
+    },
+    {
+      "wait": "text",
+      "pattern": "s4-off",
+      "buffer": "*ghostel*",
+      "timeout": 10
+    },
+    {
+      "wait": "idle",
+      "min_idle": 1.0,
+      "timeout": 10
+    },
+    {
+      "assert": {
+        "eval": "(and (ghostel-elate--has-line \"4000\") (= ghostel--term-cols ghostel-elate--cols))",
+        "buffer": "*ghostel*"
+      }
+    }
+  ]
+}

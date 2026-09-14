@@ -160,6 +160,40 @@ selects `BAD` again.
 elate run --keep-going --format json test/elate/matrix/word-boundaries-ghostel.json
 ```
 
+## Kitty graphics and scrollback suites (plain ghostel, no evil)
+
+`lib/ghostel-setup.el` is the evil-free counterpart of the setup file above and adds
+the probes these scenarios assert on: `ghostel-elate--vt` feeds raw escape bytes to the
+terminal through a file the shell cats (typing ESC at a readline prompt turns it into
+meta keys), `ghostel-elate--kitty-cells` / `ghostel-elate--kitty-slices` list every
+kitty image slice in the buffer (text-property and overlay paths) with its cell
+geometry, and `ghostel-elate--has-line` is a whole-line regexp search.
+
+- `matrix/kitty-ghostel.json` -- **GUI session** (image display is gated on
+  `display-graphic-p`; assertions are structural, no screenshot). Groups: `pin-relative`
+  (a pinned 4x2 root, a relative child at H=1/V=2, a child at H=-2 clipped to two
+  visible columns with slice x=2, children at H=200 and V=100 not drawn), `delete`
+  (`d=a`), `overlay` (rows shorter than the placement use the before-string overlay),
+  `virtual` (U=1 on a U+10EEEE placeholder run; `d=i` removes it),
+  `evict` (a placement whose rows left the scrollback limit does not reappear at the
+  top of the viewport).
+- `matrix/scrollback-ghostel.json` -- TTY, 60x24. Retention is floored at ~2 standard
+  pages regardless of `ghostel-max-scrollback` (ghostty clamps the byte limit up).
+  Groups: `evict` (5000 rows: oldest gone, newest kept, buffer bounded),
+  `region-scroll` (a DECSTBM region scroll keeps rows already in scrollback),
+  `wrap-join` (a 90-char line wraps at 60 columns and rejoins after a resize to 100),
+  `deccolm` (`CSI ? 3 h` / `l` clears the screen but keeps scrollback and the column
+  count). Never runs `clear(1)`: it sends `CSI 3 J`, which erases scrollback.
+
+```sh
+elate run --keep-going --format json test/elate/matrix/kitty-ghostel.json
+elate run --keep-going --format json test/elate/matrix/scrollback-ghostel.json
+```
+
+Protocol gotchas baked into the kitty scenario: `a=T` transmits *and* places an
+implicit copy at the cursor (use `a=t` + `a=p`); `d=A` (capital) also frees the image
+data, so later `a=p` for that id places nothing.
+
 ## Known xfails (flagged, not fixed — confirmed live on elate 0.11.0)
 
 - **`u` (undo) on `nu` and `python3`** — `evil-ghostel-undo` sends `C-_` (readline/zle

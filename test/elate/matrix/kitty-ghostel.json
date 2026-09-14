@@ -1,0 +1,212 @@
+{
+  "name": "kitty-ghostel",
+  "comment": "Kitty graphics placements as rendered into the ghostel buffer: a pinned image, relative placements (P=/Q=/H=/V=) rooted at it including left-edge clipping and off-screen children, deletion, the overlay display path on empty rows, unicode-placeholder (virtual) placements, and eviction of a placement whose rows left the scrollback limit. Structural assertions on the ghostel-kitty display slices, so no screenshot is needed; the session must be GUI because image display is gated on display-graphic-p.",
+  "session": {
+    "ui": "gui",
+    "size": "80x24",
+    "config": "minimal",
+    "eval": [
+      "(load \"/Users/daniel/.emacs.d/lib/ghostel/test/elate/lib/ghostel-setup.el\")",
+      "(setq ghostel-shell \"/opt/homebrew/bin/bash\" ghostel-max-scrollback 65536)"
+    ]
+  },
+  "steps": [
+    {
+      "eval": "(ghostel)"
+    },
+    {
+      "wait": "text",
+      "pattern": "\\$ $",
+      "buffer": "*ghostel*",
+      "timeout": 15
+    },
+    {
+      "eval": "(ghostel-send-string \"PS1='$ '\\n\")"
+    },
+    {
+      "wait": "idle",
+      "min_idle": 0.8,
+      "timeout": 10
+    },
+    {
+      "group": "pin-relative",
+      "comment": "root 4x2 at col 0; child +1,+2 (2 cols); child H=-2,V=3 clipped to 2 visible cols with slice x=2; children at H=200 and V=100 not drawn"
+    },
+    {
+      "eval": "(ghostel-elate--vt \"\u001b_Ga=d,d=A,q=2\u001b\\\\0123456789\\n0123456789\\n0123456789\\n0123456789\\n0123456789\\n0123456789\\n\u001b[6A\u001b_Ga=t,i=1,f=24,s=2,v=2,q=2;/wAA/wAA/wAA/wAA\u001b\\\\\u001b_Ga=p,i=1,p=1,c=4,r=2,q=2\u001b\\\\\u001b_Ga=p,i=1,p=2,P=1,Q=1,H=1,V=2,c=2,r=1,q=2\u001b\\\\\u001b_Ga=p,i=1,p=3,P=1,Q=1,H=-2,V=3,c=4,r=1,q=2\u001b\\\\\u001b_Ga=p,i=1,p=4,P=1,Q=1,H=200,V=4,c=2,r=1,q=2\u001b\\\\\u001b_Ga=p,i=1,p=5,P=1,Q=1,H=0,V=100,c=2,r=1,q=2\u001b\\\\\u001b[6B\" \"k1-done\")"
+    },
+    {
+      "wait": "text",
+      "pattern": "k1-done",
+      "buffer": "*ghostel*",
+      "timeout": 10
+    },
+    {
+      "wait": "idle",
+      "min_idle": 0.5,
+      "timeout": 10
+    },
+    {
+      "assert": {
+        "eval": "(equal (ghostel-elate--kitty-slices) '((0 0 0 4) (1 0 0 4) (2 1 0 2) (3 0 2 2)))",
+        "buffer": "*ghostel*"
+      }
+    },
+    {
+      "group": "delete",
+      "comment": "d=a removes every placement, keeps image data"
+    },
+    {
+      "eval": "(ghostel-elate--vt \"\u001b_Ga=d,d=a,q=2\u001b\\\\\" \"k2-done\")"
+    },
+    {
+      "wait": "text",
+      "pattern": "k2-done",
+      "buffer": "*ghostel*",
+      "timeout": 10
+    },
+    {
+      "wait": "idle",
+      "min_idle": 0.5,
+      "timeout": 10
+    },
+    {
+      "assert": {
+        "eval": "(null (ghostel-elate--kitty-cells))",
+        "buffer": "*ghostel*"
+      }
+    },
+    {
+      "group": "overlay",
+      "comment": "rows shorter than the placement use the before-string overlay path"
+    },
+    {
+      "eval": "(ghostel-elate--vt \"\\n\\n\\n\u001b[3A\u001b_Ga=p,i=1,p=1,c=4,r=2,q=2\u001b\\\\\u001b[3B\" \"k3-done\")"
+    },
+    {
+      "wait": "text",
+      "pattern": "k3-done",
+      "buffer": "*ghostel*",
+      "timeout": 10
+    },
+    {
+      "wait": "idle",
+      "min_idle": 0.5,
+      "timeout": 10
+    },
+    {
+      "assert": {
+        "eval": "(equal (ghostel-elate--kitty-slices) '((0 0 0 4) (1 0 0 4)))",
+        "buffer": "*ghostel*"
+      }
+    },
+    {
+      "eval": "(ghostel-elate--vt \"\u001b_Ga=d,d=a,q=2\u001b\\\\\" \"k3-clear\")"
+    },
+    {
+      "wait": "text",
+      "pattern": "k3-clear",
+      "buffer": "*ghostel*",
+      "timeout": 10
+    },
+    {
+      "wait": "idle",
+      "min_idle": 0.5,
+      "timeout": 10
+    },
+    {
+      "assert": {
+        "eval": "(null (ghostel-elate--kitty-cells))",
+        "buffer": "*ghostel*"
+      }
+    },
+    {
+      "group": "virtual",
+      "comment": "U=1 placement drawn on a U+10EEEE placeholder run; d=i removes it"
+    },
+    {
+      "eval": "(ghostel-elate--vt \"\u001b_Ga=t,i=2,f=24,s=2,v=2,q=2;AAD/AAD/AAD/AAD/\u001b\\\\\u001b_Ga=p,i=2,U=1,c=2,r=1,q=2\u001b\\\\\u001b[38;5;2m􎻮̅̅􎻮̅̍\u001b[0m\\n\" \"k4-done\")"
+    },
+    {
+      "wait": "text",
+      "pattern": "k4-done",
+      "buffer": "*ghostel*",
+      "timeout": 10
+    },
+    {
+      "wait": "idle",
+      "min_idle": 0.5,
+      "timeout": 10
+    },
+    {
+      "assert": {
+        "eval": "(let ((l (save-excursion (goto-char (point-min)) (search-forward (string #x10EEEE)) (line-number-at-pos)))) (equal (ghostel-elate--kitty-cells) (list (cons l 0))))",
+        "buffer": "*ghostel*"
+      }
+    },
+    {
+      "eval": "(ghostel-elate--vt \"\u001b_Ga=d,d=i,i=2,q=2\u001b\\\\\" \"k4-clear\")"
+    },
+    {
+      "wait": "text",
+      "pattern": "k4-clear",
+      "buffer": "*ghostel*",
+      "timeout": 10
+    },
+    {
+      "wait": "idle",
+      "min_idle": 0.5,
+      "timeout": 10
+    },
+    {
+      "assert": {
+        "eval": "(null (ghostel-elate--kitty-cells))",
+        "buffer": "*ghostel*"
+      }
+    },
+    {
+      "group": "evict",
+      "comment": "a placement whose rows are evicted from scrollback must not reappear at the top of the viewport"
+    },
+    {
+      "eval": "(ghostel-elate--vt \"0123456789\\n0123456789\\n0123456789\\n0123456789\\n0123456789\\n0123456789\\n\u001b[6A\u001b_Ga=p,i=1,p=1,c=4,r=2,q=2\u001b\\\\\u001b[6B\" \"k5-done\")"
+    },
+    {
+      "wait": "text",
+      "pattern": "k5-done",
+      "buffer": "*ghostel*",
+      "timeout": 10
+    },
+    {
+      "wait": "idle",
+      "min_idle": 0.5,
+      "timeout": 10
+    },
+    {
+      "assert": {
+        "eval": "(equal (ghostel-elate--kitty-slices) '((0 0 0 4) (1 0 0 4)))",
+        "buffer": "*ghostel*"
+      }
+    },
+    {
+      "eval": "(ghostel-send-string \"seq 1 3000; echo k5-evicted\\n\")"
+    },
+    {
+      "wait": "text",
+      "pattern": "k5-evicted",
+      "buffer": "*ghostel*",
+      "timeout": 30
+    },
+    {
+      "wait": "idle",
+      "min_idle": 1.0,
+      "timeout": 10
+    },
+    {
+      "assert": {
+        "eval": "(and (null (ghostel-elate--kitty-cells)) (not ghostel--kitty-active))",
+        "buffer": "*ghostel*"
+      }
+    }
+  ]
+}
