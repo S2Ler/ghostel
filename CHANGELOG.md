@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.54.0] — 2026-09-15
+
 ### Added
 - `ghostel-tty-forward-notify`: a `ghostel-notification-function` that
   re-emits OSC 9 / OSC 777 notifications to the outer terminal on tty
@@ -17,8 +19,21 @@ All notable changes to this project will be documented in this file.
 - `ghostel-kitty-graphics-mediums` defaults to all mediums, as in Ghostty and
   kitty, so broot and ranger previews work without configuration.  Set it to
   nil to accept inline image data only.
+- A file path ending a sentence (`written to /tmp/notes.md.`) is
+  detected as a link without the trailing punctuation.
 
 ### Fixed
+- Redraws no longer scan the whole buffer for kitty Unicode placeholders,
+  so a stale virtual placement (e.g. after a kitty image tool exited)
+  no longer makes every redraw slow after large output such as `rg`
+  over long single-line JSON files.  Placeholder images also take their
+  slice row from the placeholder's diacritics instead of buffer line
+  order.  Fixes [#673](https://github.com/dakra/ghostel/issues/673).
+- Mouse clicks and wheel events land on the right cell under
+  `text-scale-mode`, `buffer-face-mode`, or a theme that remaps the
+  default face: cells are measured with the window's font metrics
+  instead of the frame's character size.
+  Fixes [#676](https://github.com/dakra/ghostel/issues/676).
 - The native PTY's window size (`TIOCGWINSZ`) carries the cell pixel
   geometry, so image tools that size kitty graphics from it (broot,
   ranger) no longer fall back to text rendering.
@@ -35,6 +50,12 @@ All notable changes to this project will be documented in this file.
   a 1×1 px answer to XTWINOPS CSI 14/16 t and stretches its images;
   the cell geometry now applies before the first redraw.  Fixes
   [#642](https://github.com/dakra/ghostel/issues/642).
+
+### Internal
+- Bumped ghostty to 0c2a290d3 and adapted to the ghostty-vt API changes
+  (scrollback option, palette allocator, stream options, kitty image
+  data union).  Kitty relative placements are drawn via the resolved
+  parent chain and clipped on all four edges like upstream.
 
 ## [0.53.0] — 2026-09-02
 
