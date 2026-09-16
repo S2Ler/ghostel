@@ -565,5 +565,23 @@ still reaches every slot by number."
             (should (equal (buffer-name buf) ghostel-buffer-name)))
         (when (buffer-live-p buf) (kill-buffer buf))))))
 
+(ert-deftest ghostel-test-create-missing-directory-errors ()
+  "`ghostel-create' in a missing directory signals and leaves no buffer."
+  (ghostel-buffers-test--with-create-stubs
+    (let ((default-directory (expand-file-name "ghostel-create-gone/"
+                                               temporary-file-directory))
+          (ghostel-buffer-name "*ghostel-create-gone*"))
+      (should-error (ghostel-create) :type 'user-error)
+      (should-not (get-buffer ghostel-buffer-name)))))
+
+(ert-deftest ghostel-test-create-spawn-failure-kills-buffer ()
+  "A failing shell spawn kills the new buffer and re-signals."
+  (ghostel-buffers-test--with-create-stubs
+    (cl-letf (((symbol-function 'ghostel--start-process)
+               (lambda () (error "Spawn failed"))))
+      (let ((ghostel-buffer-name "*ghostel-create-fail*"))
+        (should-error (ghostel-create))
+        (should-not (get-buffer ghostel-buffer-name))))))
+
 (provide 'ghostel-buffers-test)
 ;;; ghostel-buffers-test.el ends here

@@ -745,8 +745,9 @@ Terminals that were running a program (=ghostel-exec=, =ghostel-compile=,
 eshell visual commands) are not respawned to avoid re-running a saved command
 (e.g. a build).  Remote (TRAMP) terminals are skipped for the same reason:
 spawning their shells would open connections, possibly prompting for
-credentials.  Terminals whose saved directory no longer exists are skipped as
-well.  Terminals whose shell already exited are not saved in the first place.
+credentials.  Terminals whose saved directory no longer exists fail to load,
+with an error in =*Messages*=.  Terminals whose shell already exited are not
+saved in the first place.
 
 Restored terminals spawn real shells, which can be a lot when restarting.
 The =desktop-restore-eager= option limits how many buffers are restored

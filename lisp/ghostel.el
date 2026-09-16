@@ -5213,6 +5213,11 @@ spawn after initialization."
   (unless (eq (null rows) (null cols))
     (user-error "ROWS and COLS must be provided together"))
   (with-current-buffer buffer
+    ;; A local child's chdir failure would only surface as an immediate
+    ;; exit; TRAMP reports remote ones itself.
+    (unless (or (file-remote-p default-directory)
+                (file-directory-p default-directory))
+      (user-error "Ghostel: directory %s does not exist" default-directory))
     (when (process-live-p ghostel--process)
       (user-error "Buffer %s already has a running ghostel process"
                   (buffer-name buffer)))
@@ -5415,12 +5420,16 @@ To run a specific program instead of a shell, see `ghostel-exec'."
         (when (> instance 1)
           (setq buf-name (format "%s<%d>" name instance)))))
     (let ((buffer (ghostel--create buf-name display)))
-      (with-current-buffer buffer
-        (setq ghostel--managed-buffer-name (buffer-name)
-              ghostel--initial-name (buffer-name)
-              ghostel-identity identity)
-        (ghostel--start-process)
-        (ghostel--apply-initial-input-mode))
+      (condition-case err
+          (with-current-buffer buffer
+            (setq ghostel--managed-buffer-name (buffer-name)
+                  ghostel--initial-name (buffer-name)
+                  ghostel-identity identity)
+            (ghostel--start-process)
+            (ghostel--apply-initial-input-mode))
+        ((error quit)
+         (when (buffer-live-p buffer) (kill-buffer buffer))
+         (signal (car err) (cdr err))))
       buffer)))
 
 (defun ghostel--project-buffer-name (root)

@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- Starting a terminal in a directory that no longer exists signals a
+  `user-error` instead of showing a shell that exits immediately, and a
+  failed shell spawn no longer leaves an empty buffer behind.
+
 ## [0.54.0] — 2026-09-15
 
 ### Added
