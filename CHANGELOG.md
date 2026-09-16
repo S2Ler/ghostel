@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- `ghostel-org`: a `ghostel:` Org link type naming a directory and,
+  optionally, a buffer (`ghostel:DIR::NAME`).  Following the first pops to
+  a live terminal in that directory or starts a shell there; the second
+  behaves like a bookmark.  `org-store-link` in a ghostel buffer stores
+  the latter.  Enable with `(with-eval-after-load 'org (require 'ghostel-org))`.
+  Fixes [#653](https://github.com/dakra/ghostel/issues/653).
+
 ### Changed
 - Jumping to a bookmark only types the `cd` into an idle shell: not while
   a command runs, on the alternate screen, or with input on the prompt

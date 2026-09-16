@@ -72,6 +72,9 @@ Like normal Emacs `C-k'.  Kill to end of line and put content in kill-ring."
 
 (use-package ghostel-comint
   :hook (after-init . ghostel-comint-global-mode))
+
+(use-package ghostel-org
+  :after org)
 #+end_src
 
 If you are an evil user you can install the [[https://melpa.org/#/evil-ghostel][evil-ghostel]] extension:
@@ -755,6 +758,42 @@ saved in the first place.
 Restored terminals spawn real shells, which can be a lot when restarting.
 The =desktop-restore-eager= option limits how many buffers are restored
 during =desktop-read= itself, deferring the rest to idle time.
+
+** Org links
+:properties:
+:custom_id: org-links
+:end:
+#+cindex: org
+
+=ghostel-org= adds a =ghostel:= Org link type that names a directory and,
+optionally, a buffer:
+
+#+begin_example
+[[ghostel:~/src/project][project shell]]
+[[ghostel:~/src/project::*ghostel*][my shell, in project]]
+#+end_example
+
+Following the first form pops to a live ghostel terminal whose working
+directory is that directory, or starts a fresh shell there when none exists.
+The second form behaves like a [[#bookmarks][bookmark]]: it switches to the
+named buffer, typing a =cd= when it sits elsewhere, and otherwise starts that
+buffer in the directory.  =org-store-link= in a ghostel buffer stores the second
+form, and =org-insert-link= completes =ghostel:= with a directory prompt.
+
+Add
+
+#+begin_src emacs-lisp
+(with-eval-after-load 'org (require 'ghostel-org))
+#+end_src
+
+or
+
+#+begin_src emacs-lisp
+(use-package ghostel-org
+  :after org)
+#+end_src
+
+to your config.
 
 ** Links and file detection
 :properties:
@@ -2268,6 +2307,7 @@ while ghostel and vterm trade a compile step for a C/Zig engine.
 | Eshell integration            | ✅      | ❌       | ✅       |
 | Bookmark support              | ✅      | ✅       | ❌       |
 | Desktop (session) restore     | ✅      | ❌       | ❌       |
+| Org links                     | ✅      | ❌       | ❌       |
 |-------------------------------+---------+----------+----------|
 | Input modes (char/semi/emacs) | ✅      | partial  | ✅       |
 | Line mode (local editing)     | ✅      | ❌       | ✅       |

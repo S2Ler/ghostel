@@ -124,9 +124,8 @@ is non-nil, a `cd' is typed into it, but only while the shell is idle
                      (buffer-name) default-directory)
           (when (memq ghostel--input-mode '(copy emacs))
             (ghostel-readonly-exit))
-          ;; Ghostel records remote dirs as TRAMP paths, so strip the TRAMP
-          ;; prefix with `file-local-name', and quote so paths with spaces
-          ;; survive.
+          ;; We record remote dirs as TRAMP paths, so strip the TRAMP prefix
+          ;; with `file-local-name', and quote so paths with spaces survive.
           (ghostel-send-string
            (concat "cd " (shell-quote-argument (file-local-name dir))))
           (ghostel-send-key "return"))))
