@@ -354,6 +354,45 @@ type error that aborts `kill-buffer'."
       (when (buffer-live-p buf)
         (ghostel-test--cleanup-exec-buffer buf)))))
 
+(ert-deftest ghostel-test-spawn-process-strips-remote-prefix ()
+  "A remote PROGRAM reaches the spawn as the path the remote shell sees.
+`eshell-find-interpreter' resolves a command on a TRAMP directory to a
+remote-prefixed path, which the remote shell cannot exec."
+  (let (captured)
+    (cl-letf (((symbol-function 'ghostel--spawn-via-emacs)
+               (lambda (program &rest _) (setq captured program) nil)))
+      (with-temp-buffer
+        (ghostel--spawn-process "/ssh:somehost:/usr/bin/top" nil t))
+      (should (equal captured "/usr/bin/top")))))
+
+(ert-deftest ghostel-test-eshell-exec-visual-survives-exit-during-spawn ()
+  "An exit processed inside `ghostel-exec' keeps the visual buffer usable.
+The sentinel then runs before the buffer-locals and exit hook exist."
+  :tags '(native posix)
+  (skip-unless (file-executable-p "/bin/sh"))
+  (let ((ghostel-kill-buffer-on-exit t)
+        (eshell-destroy-buffer-when-process-dies nil)
+        buf)
+    (unwind-protect
+        (cl-letf* ((exec (symbol-function 'ghostel-exec))
+                   ((symbol-function 'ghostel-exec)
+                    (lambda (buffer &rest args)
+                      (setq buf buffer)
+                      (let ((proc (apply exec buffer args)))
+                        (ghostel-test--wait-until
+                         (lambda () (not (process-live-p proc))) nil 5)
+                        proc))))
+          (save-window-excursion
+            (ghostel-eshell--exec-visual "/bin/sh" "-c" "exit 0"))
+          (with-current-buffer buf
+            ;; The dismiss binding arrives through a timer.
+            (ghostel-test--wait-until
+             (lambda () (eq (lookup-key (current-local-map) (kbd "q"))
+                            #'kill-current-buffer))
+             nil 5)))
+      (when (buffer-live-p buf)
+        (ghostel-test--cleanup-exec-buffer buf)))))
+
 (ert-deftest ghostel-test-eshell-visual-command-mode-toggles-advice ()
   "Enabling/disabling the mode adds/removes the `eshell-exec-visual' advice."
   (let ((was-on ghostel-eshell-visual-command-mode))

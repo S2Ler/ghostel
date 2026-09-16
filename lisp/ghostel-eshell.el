@@ -82,18 +82,25 @@ eshell."
                        (eshell-stringify-list
                         (append (cdr interp) (cdr args)))))
            (buf (generate-new-buffer
-                 (concat "*" (file-name-nondirectory program) "*"))))
+                 (concat "*" (file-name-nondirectory program) "*")))
+           (kill-on-exit
+            (bound-and-true-p eshell-destroy-buffer-when-process-dies)))
       (switch-to-buffer buf)
-      (ghostel-exec buf program prog-args
-                    `((kind . eshell) (command . (,program . ,prog-args))))
-      (with-current-buffer buf
-        (setq-local ghostel-kill-buffer-on-exit
-                    (bound-and-true-p eshell-destroy-buffer-when-process-dies))
-        (setq-local ghostel-buffer-name-function
-                    (and ghostel-eshell-track-title
-                         #'ghostel-buffer-name-by-title))
-        (add-hook 'ghostel-exit-functions
-                  #'ghostel-eshell--visual-exit nil t))
+      ;; A child that exits while TRAMP is still inside `make-process'
+      ;; reaches the sentinel before the buffer-local below is set.
+      (let ((ghostel-kill-buffer-on-exit kill-on-exit))
+        (ghostel-exec buf program prog-args
+                      `((kind . eshell) (command . (,program . ,prog-args)))))
+      (when (buffer-live-p buf)
+        (with-current-buffer buf
+          (setq-local ghostel-kill-buffer-on-exit kill-on-exit)
+          (setq-local ghostel-buffer-name-function
+                      (and ghostel-eshell-track-title
+                           #'ghostel-buffer-name-by-title))
+          (add-hook 'ghostel-exit-functions
+                    #'ghostel-eshell--visual-exit nil t)
+          (unless (process-live-p ghostel--process)
+            (ghostel-eshell--visual-exit buf nil))))
       nil)))
 
 ;;;###autoload

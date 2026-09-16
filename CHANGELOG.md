@@ -21,6 +21,9 @@ All notable changes to this project will be documented in this file.
   instead of opening a second one.
 
 ### Fixed
+- Eshell visual commands run from a TRAMP directory (`/ssh:`, `/sudo::`)
+  no longer fail with "Selecting deleted buffer" or a remote "No such
+  file or directory".  Fixes [#693](https://github.com/dakra/ghostel/issues/693).
 - Starting a terminal in a directory that no longer exists signals a
   `user-error` instead of showing a shell that exits immediately, and a
   failed shell spawn no longer leaves an empty buffer behind.

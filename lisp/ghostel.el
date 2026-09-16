@@ -4132,12 +4132,13 @@ for the native child process."
 
 (defun ghostel--spawn-process (program program-args remote-p)
   "Dispatch the spawn of PROGRAM (with PROGRAM-ARGS) to native or Emacs.
-Local PROGRAM is resolved to an absolute path before backend dispatch.
+Local PROGRAM is resolved to an absolute path before backend dispatch;
+a remote PROGRAM is stripped to the path the remote shell sees.
 Local buffers use the native PTY path when `ghostel-use-native-pty'
 is non-nil; remote (REMOTE-P) buffers always go through Emacs so
 TRAMP can manage the remote shell."
   (let* ((program (if remote-p
-                      program
+                      (file-local-name program)
                     (ghostel--resolve-local-executable program)))
          (process (if (and ghostel-use-native-pty (not remote-p))
                       (ghostel--spawn-via-native (cons program program-args))
