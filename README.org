@@ -728,8 +728,11 @@ vterm.
 
 =ghostel-bookmark-check-dir= (default =t=) controls directory restoration: a
 fresh buffer starts its shell in the bookmarked directory, and a reused buffer
-that has since moved elsewhere gets a =cd= typed into its shell.  Set it to =nil=
-to leave the directory alone.
+that has since moved elsewhere gets a =cd= typed into its shell.  The =cd= is
+only typed into an idle shell: not while a command runs (detected through
+shell integration) or a full-screen program is open, and not when there is
+already input on the prompt line.  Set it to =nil= to leave the directory
+alone.
 
 ** Desktop
 :properties:

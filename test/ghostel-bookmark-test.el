@@ -208,9 +208,8 @@ must fall through to the create branch instead."
 
 (ert-deftest ghostel-test-bookmark-handler-create-stamps-identity ()
   "The create branch stamps the recorded identity.
-Records without one (or with a pre-structured name string) get no
-identity: fabricating a slot would let plain `ghostel' claim the
-restored buffer."
+Records without one (or with a pre-structured name string) get the
+plain-terminal slot for their name, so `ghostel' can claim the buffer."
   (let ((made nil))
     (cl-letf (((symbol-function 'ghostel--load-module) #'ignore)
               ((symbol-function 'ghostel--create)
@@ -240,7 +239,10 @@ restored buffer."
                (ghostel-test--bookmark-record " *ghostel-bm-old*"
                                               "/tmp/ghostel-bm-create/"
                                               "bm-legacy-name")))
-            (should-not (buffer-local-value 'ghostel-identity (car made))))
+            (should (equal (buffer-local-value 'ghostel-identity (car made))
+                           '((kind . term)
+                             (name . " *ghostel-bm-old*")
+                             (instance . 1)))))
         (dolist (b made)
           (when (buffer-live-p b) (kill-buffer b)))))))
 
@@ -434,13 +436,16 @@ Covers both the command respawn and the shell branch."
 Asserts the exact bytes the handler sends rather than the shell's OSC 7
 round-trip (that is ghostel's own directory tracking, covered elsewhere, and
 too timing-sensitive to drive a real shell through here).  With
-`ghostel-bookmark-check-dir' nil, nothing is typed."
+`ghostel-bookmark-check-dir' nil, a busy shell, or a dir that only
+differs in spelling, nothing is typed."
   :tags '(native)
   ;; `ghostel-test--with-terminal-buffer' gives a live `ghostel--term' (so the
   ;; reuse-branch guard passes); a dummy pipe process satisfies the handler's
   ;; live-shell check, and the send functions are stubbed.
   (ghostel-test--with-terminal-buffer (buf term 24 80 1000)
     (setq-local ghostel--process (ghostel-test--dummy-process "bm-cd" nil))
+    ;; An empty buffer with the cursor at its start is an idle prompt.
+    (setq ghostel--cursor-char-pos (point-min))
     (let ((sent nil)
           (default-directory "/tmp/ghostel-bm-here/")
           ;; A remote dir with a space exercises both departures from vterm:
@@ -462,7 +467,35 @@ too timing-sensitive to drive a real shell through here).  With
         (let ((ghostel-bookmark-check-dir nil))
           (ghostel-bookmark-handler
            (ghostel-test--bookmark-record (buffer-name) "/tmp/elsewhere/")))
+        (should-not sent)
+        (let ((ghostel--command-running t))
+          (ghostel-bookmark-handler
+           (ghostel-test--bookmark-record (buffer-name) "/tmp/elsewhere/")))
+        (should-not sent)
+        ;; Same local directory under another spelling.
+        (let ((default-directory "~/"))
+          (ghostel-bookmark-handler
+           (ghostel-test--bookmark-record (buffer-name)
+                                          (expand-file-name "~/"))))
         (should-not sent)))))
+
+(ert-deftest ghostel-test-bookmark-shell-idle-p ()
+  "The shell counts as idle only at the start of an empty input line."
+  (ghostel-test--with-compile-buffer buf
+    (should-not (ghostel-bookmark--shell-idle-p))
+    (setq ghostel--cursor-char-pos (point-min))
+    (should (ghostel-bookmark--shell-idle-p))
+    (let ((ghostel--command-running t))
+      (should-not (ghostel-bookmark--shell-idle-p)))
+    (cl-letf (((symbol-function 'ghostel-alt-screen-p) (lambda () t)))
+      (should-not (ghostel-bookmark--shell-idle-p)))
+    (let ((inhibit-read-only t))
+      (insert (propertize "$ " 'ghostel-prompt t))
+      (setq ghostel--cursor-char-pos (point-max))
+      (should (ghostel-bookmark--shell-idle-p))
+      (insert "ls")
+      (setq ghostel--cursor-char-pos (point-max))
+      (should-not (ghostel-bookmark--shell-idle-p)))))
 
 (provide 'ghostel-bookmark-test)
 ;;; ghostel-bookmark-test.el ends here

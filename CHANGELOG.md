@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- Jumping to a bookmark only types the `cd` into an idle shell: not while
+  a command runs, on the alternate screen, or with input on the prompt
+  line.  A busy shell is still switched to, with a message.
+- A shell created for a bookmark without a recorded identity now gets the
+  plain-terminal slot for its name, so `ghostel` can claim the buffer
+  instead of opening a second one.
+
 ### Fixed
 - Starting a terminal in a directory that no longer exists signals a
   `user-error` instead of showing a shell that exits immediately, and a
