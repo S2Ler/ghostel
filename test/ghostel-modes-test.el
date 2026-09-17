@@ -3,11 +3,41 @@
 ;;; Commentary:
 
 ;; Input mode state + char/emacs/copy mode transitions, fake cursor,
-;; copy-mode cursor + hl-line.
+;; copy-mode cursor + hl-line, menu-bar menu.
 
 ;;; Code:
 
 (require 'ghostel-test-helpers)
+
+(ert-deftest ghostel-test-menu-items-are-commands ()
+  "Every leaf of `ghostel-menu' names a live command."
+  (cl-labels ((walk (map)
+                (map-keymap (lambda (_key item)
+                              (let ((def (nth 2 item)))
+                                (cond ((keymapp def) (walk def))
+                                      (def (should (commandp def))))))
+                            map)))
+    (walk (lookup-key ghostel-mode-map [menu-bar ghostel]))))
+
+(ert-deftest ghostel-test-menu-bound-once-per-input-mode ()
+  "Exactly one active keymap carries the menu in every input mode.
+Char mode activates its keymap twice (local map and emulation alist);
+a menu on both would render every item twice."
+  (let ((buf (generate-new-buffer " *ghostel-test-menu*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (ghostel-mode)
+          (let ((ghostel--term 'fake))
+            (cl-letf (((symbol-function 'ghostel--invalidate) #'ignore)
+                      ((symbol-function 'ghostel--anchor-window) #'ignore))
+              (dolist (enter '(ghostel-semi-char-mode ghostel-char-mode
+                               ghostel-copy-mode ghostel-emacs-mode))
+                (funcall enter)
+                (should (= 1 (seq-count
+                              (lambda (map)
+                                (keymapp (lookup-key map [menu-bar ghostel])))
+                              (current-active-maps))))))))
+      (kill-buffer buf))))
 
 (ert-deftest ghostel-test-mode-remaps-default-face ()
   "Ghostel buffers inherit their default appearance from `ghostel-default'."

@@ -1454,10 +1454,67 @@ Drives the `emulation-mode-map-alists' entry that makes
 `ghostel-char-mode-map' override minor-mode keymaps.")
 
 (defvar ghostel--char-mode-override-alist
-  `((ghostel--char-mode-override-active . ,ghostel-char-mode-map))
-  "Alist entry registered in `emulation-mode-map-alists' for char mode.")
+  `((ghostel--char-mode-override-active
+     . ,(make-composed-keymap nil ghostel-char-mode-map)))
+  "Alist entry registered in `emulation-mode-map-alists' for char mode.
+A child map, so `ghostel-menu' is not also active via the local map.")
 
 (add-to-list 'emulation-mode-map-alists 'ghostel--char-mode-override-alist)
+
+(easy-menu-define ghostel-menu
+  (list ghostel-mode-map (cdar ghostel--char-mode-override-alist))
+  "Menu for `ghostel-mode'."
+  '("Ghostel"
+    ("Input Mode"
+     ["Semi-char" ghostel-semi-char-mode
+      :style radio :selected (eq ghostel--input-mode 'semi-char)
+      :help "Send most keys to the terminal, keep Emacs prefixes"]
+     ["Char" ghostel-char-mode
+      :style radio :selected (eq ghostel--input-mode 'char)
+      :help "Send every key to the terminal"]
+     ["Line" ghostel-line-mode
+      :style radio :selected (eq ghostel--input-mode 'line)
+      :help "Edit a line in Emacs, send it on RET"]
+     ["Copy" ghostel-copy-mode
+      :style radio :selected (eq ghostel--input-mode 'copy)
+      :help "Read-only; move point and copy freely"]
+     ["Emacs" ghostel-emacs-mode
+      :style radio :selected (eq ghostel--input-mode 'emacs)
+      :help "Read-only with plain Emacs keybindings"])
+    ("Signals"
+     ["Interrupt (C-c)" ghostel-send-C-c]
+     ["Suspend (C-z)" ghostel-send-C-z]
+     ["Quit (C-\\)" ghostel-send-C-backslash]
+     ["End of File (C-d)" ghostel-send-C-d]
+     "--"
+     ["Send Next Key Literally" ghostel-send-next-key])
+    ("Navigate"
+     ["Next Prompt" ghostel-next-prompt]
+     ["Previous Prompt" ghostel-previous-prompt]
+     "--"
+     ["Next Link" ghostel-next-hyperlink]
+     ["Previous Link" ghostel-previous-hyperlink]
+     ["Open Link at Point" ghostel-open-link-at-point]
+     ["Find File at Point" ghostel-find-file-at-point])
+    "--"
+    ["Paste" ghostel-paste]
+    ["Copy All" ghostel-copy-all]
+    ["Clear Screen" ghostel-clear]
+    ["Clear Scrollback" ghostel-clear-scrollback]
+    "--"
+    ["Terminal" ghostel]
+    ["Project Terminal" ghostel-project]
+    ["Next Terminal" ghostel-next]
+    ["Previous Terminal" ghostel-previous]
+    ["List Terminals" ghostel-list-buffers]
+    "--"
+    ["Sync Theme" ghostel-sync-theme]
+    ["Force Redraw" ghostel-force-redraw]
+    ("Debug"
+     ["Debug Info" ghostel-debug-info
+      :help "Collect environment details for a bug report"]
+     ["Debug Keypress" ghostel-debug-keypress])
+    ["Customize" (customize-group 'ghostel)]))
 
 
 ;;; Key sending
