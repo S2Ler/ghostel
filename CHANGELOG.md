@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.55.0] — 2026-09-17
+
 ### Added
 - `ghostel-org`: a `ghostel:` Org link type naming a directory and,
   optionally, a buffer (`ghostel:DIR::NAME`).  Following the first pops to
@@ -27,6 +29,9 @@ All notable changes to this project will be documented in this file.
 - Starting a terminal in a directory that no longer exists signals a
   `user-error` instead of showing a shell that exits immediately, and a
   failed shell spawn no longer leaves an empty buffer behind.
+- A terminal reply (cursor position, device attributes, color queries) no
+  longer freezes Emacs when the child's input queue is full: the native PTY
+  drops the reply instead of blocking the reader thread.
 
 ## [0.54.0] — 2026-09-15
 
