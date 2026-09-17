@@ -4416,13 +4416,13 @@ the selected window's buffer."
   "Non-nil if WINDOW's point lets it follow live terminal output.
 WINDOW's buffer must be current.  Emacs mode follows on the live cursor,
 a line-mode window selected in its frame on the live edge (other windows' point
-carries no user intent); all other modes always follow."
+carries no user intent); all other modes follow unless a region is active."
   (pcase ghostel--input-mode
     ('emacs (ghostel--window-on-cursor-p window))
     ('line (or (not (eq window (frame-selected-window
                                 (window-frame window))))
                (ghostel--line-mode-on-live-edge-p window)))
-    (_ t)))
+    (_ (not (region-active-p)))))
 
 (defun ghostel--window-anchored-p (window &optional body-pixel-height)
   "Non-nil if WINDOW is scrolled to follow the live terminal output.
@@ -4574,12 +4574,12 @@ window over a mostly-empty grid), the anchor starts at the cursor's line
 instead.  `ghostel--window-anchored-p' recognizes such a clamped window
 as still following the output.
 
-Copy mode is never anchored (the viewport is frozen).  Otherwise
-WINDOW anchors while `ghostel--window-follows-p' holds, or when
-FOLLOWING (the caller established the follow before the render moved
-the cursor) or FORCE (deliberate anchors such as paste/yank) is
-non-nil.  Semi-char/char/Emacs snap point to the live cursor; line
-mode keeps the user's point."
+Copy mode is never anchored (the viewport is frozen).
+Otherwise WINDOW anchors while `ghostel--window-follows-p' holds,
+or when FOLLOWING (the caller established the follow before the render moved
+the cursor) or FORCE (deliberate anchors such as paste/yank) is non-nil.
+Semi-char/char/Emacs snap point to the live cursor;
+line mode keeps the user's point."
   (when-let* ((window (or window (selected-window)))
               (buffer (window-buffer window))
               ((with-current-buffer buffer

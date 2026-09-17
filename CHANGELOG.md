@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- A mouse selection left active with `ghostel-mouse-drag-input-mode` nil
+  no longer grows to the prompt when the window is resized or output
+  arrives: a window whose buffer holds an active region no longer follows
+  output, as in Emacs mode.  Terminal input clears the region and
+  re-anchors the selected window.
+  Fixes [#695](https://github.com/dakra/ghostel/issues/695).
+
 ## [0.55.0] — 2026-09-17
 
 ### Added
