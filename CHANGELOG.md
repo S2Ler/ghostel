@@ -11,6 +11,12 @@ All notable changes to this project will be documented in this file.
   output, as in Emacs mode.  Terminal input clears the region and
   re-anchors the selected window.
   Fixes [#695](https://github.com/dakra/ghostel/issues/695).
+- Switching to a live input mode clears an active region before snapping
+  point to the end of the buffer.  A mouse selection left active stretched
+  to the prompt and reached the primary selection: on the keystroke that
+  exits a read-only mode entered by leaving the buffer and returning, on
+  entering char mode, and on leaving line mode.
+  Fixes [#698](https://github.com/dakra/ghostel/issues/698).
 
 ## [0.55.0] — 2026-09-17
 

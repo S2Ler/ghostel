@@ -267,6 +267,56 @@ unlike semi-char mode where it tracks the terminal cursor."
         (ghostel-readonly-exit)
         (should (equal (list (selected-window) t) adjust-args))))))
 
+(ert-deftest ghostel-test-readonly-exit-deactivates-mark-before-moving-point ()
+  "Exiting a read-only mode clears the region before snapping point.
+Deactivating after the snap would publish the grown span to PRIMARY."
+  (with-temp-buffer
+    (ghostel-mode)
+    (ghostel-test--insert-rendered "alpha\nbeta\n")
+    (let ((ghostel--term 'fake)
+          (ghostel--input-mode 'copy)
+          (ghostel--pre-readonly-mode 'semi-char)
+          (transient-mark-mode t)
+          (end (+ (point-min) 5))
+          (deactivated-at nil))
+      (set-mark (point-min))
+      (goto-char end)
+      (add-hook 'deactivate-mark-hook
+                (lambda () (setq deactivated-at (point))) nil t)
+      (cl-letf (((symbol-function 'ghostel--adjust-size) #'ignore)
+                ((symbol-function 'ghostel--anchor-window) #'ignore)
+                ((symbol-function 'ghostel-force-redraw) #'ignore)
+                ((symbol-function 'message) #'ignore))
+        (ghostel-readonly-exit))
+      (should (equal deactivated-at end))
+      (should (= (point) (point-max))))))
+
+(ert-deftest ghostel-test-live-mode-switch-deactivates-mark ()
+  "Switching to a live input mode clears the region before snapping point.
+The snap to `point-max' would otherwise stretch a selection to the prompt."
+  (dolist (spec (list (cons #'ghostel-char-mode 'semi-char)
+                      (cons #'ghostel-semi-char-mode 'line)))
+    (with-temp-buffer
+      (ghostel-mode)
+      (ghostel-test--insert-rendered "alpha\nbeta\n")
+      (let ((ghostel--term 'fake)
+            (ghostel--input-mode (cdr spec))
+            (ghostel-mark-activation-input-mode nil)
+            (transient-mark-mode t)   ; nil in batch
+            (end (+ (point-min) 5))
+            (deactivated-at nil))
+        (set-mark (point-min))
+        (goto-char end)
+        (add-hook 'deactivate-mark-hook
+                  (lambda () (setq deactivated-at (point))) nil t)
+        (cl-letf (((symbol-function 'ghostel--anchor-window) #'ignore)
+                  ((symbol-function 'ghostel--invalidate) #'ignore)
+                  ((symbol-function 'ghostel--line-mode-teardown) #'ignore)
+                  ((symbol-function 'message) #'ignore))
+          (funcall (car spec)))
+        (should (equal deactivated-at end))
+        (should (= (point) (point-max)))))))
+
 (ert-deftest ghostel-test-copy-mode-cursor ()
   "Test that copy-mode restores cursor visibility when terminal hid it."
   (let ((buf (generate-new-buffer " *ghostel-test-copy-cursor*")))

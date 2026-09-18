@@ -2568,6 +2568,7 @@ Most keys are sent to the terminal; keys in
     (setq ghostel--mode-line-tag nil)
     (ghostel--mode-line-refresh)
     (when ghostel--term
+      (deactivate-mark)  ; A region left active would grow with point.
       ;; Snap the window to the live viewport so the user lands back at the
       ;; prompt after exiting copy/emacs/line.  FORCE so a deliberate switch
       ;; wins over any `ghostel-inhibit-anchor-functions' roaming veto.
@@ -2602,6 +2603,7 @@ Even keys listed in `ghostel-keymap-exceptions' (\\`C-c', \\`C-x',
     (setq ghostel--mode-line-tag (ghostel--mode-line-tag-make 'char ":Char"))
     (ghostel--mode-line-refresh)
     (when ghostel--term
+      (deactivate-mark)  ; A region left active would grow with point.
       ;; FORCE: a deliberate switch wins over any roaming veto.
       (goto-char (point-max))
       (ghostel--anchor-window nil t)
@@ -2764,6 +2766,7 @@ Add it to other jump commands as a hook or `:after' advice (see the README)."
       (setq ghostel--pre-readonly-mode nil)
       (if ghostel--readonly-exit-function
           (funcall ghostel--readonly-exit-function)
+        (deactivate-mark)  ; A region left active would grow with point.
         ;; Return to the live viewport before reenabling terminal input.
         (goto-char (point-max))
         (setq ghostel--force-next-redraw t)
