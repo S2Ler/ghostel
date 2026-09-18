@@ -1910,6 +1910,53 @@ app redraws all rows at new width via the filter pipeline."
                 (delete-process proc)))))
       (kill-buffer buf))))
 
+(ert-deftest ghostel-test-alt-screen-resize-drops-stale-selection ()
+  "A selection over an alt-screen row dies when the app repaints it.
+Resizing makes a TUI redraw its whole screen, so the region would be
+left highlighting text the user never selected (#704)."
+  :tags '(native)
+  (let ((buf (generate-new-buffer " *ghostel-test-stale-selection*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (set-window-buffer (selected-window) (current-buffer))
+          (ghostel-mode)
+          (setq ghostel--term (ghostel--new 10 40 100))
+          (let* ((ghostel-mark-activation-input-mode nil)
+                 (transient-mark-mode t)  ; nil in batch
+                 (proc (ghostel-test--dummy-process "ghostel-test-sel" buf))
+                 (ghostel--process proc))
+            (unwind-protect
+                (progn
+                  (ghostel--write-vt ghostel--term "\e[?1049h\e[H\e[2J")
+                  (dotimes (i 8)
+                    (ghostel--write-vt ghostel--term
+                                       (format "\e[%d;1HOLD-R%02d" (1+ i) i)))
+                  (ghostel--redraw-now buf)
+
+                  ;; Select the third row.
+                  (goto-char (point-min))
+                  (forward-line 2)
+                  (set-mark (point))
+                  (end-of-line)
+                  (should (equal "OLD-R02" (buffer-substring-no-properties
+                                            (region-beginning) (region-end))))
+
+                  ;; Resize, then let the app repaint every row.
+                  (ghostel--set-size ghostel--term 6 40)
+                  (setq ghostel--force-next-redraw t)
+                  (ghostel--filter
+                   proc (concat "\e[H\e[2J"
+                                (mapconcat
+                                 (lambda (i) (format "\e[%d;1HNEW-R%02d" (1+ i) i))
+                                 (number-sequence 0 5) "")))
+                  (ghostel--redraw-now buf)
+
+                  (should (string-match-p "NEW-R00" (buffer-string)))
+                  (should-not (region-active-p)))
+              (when (process-live-p proc)
+                (delete-process proc)))))
+      (kill-buffer buf))))
+
 (ert-deftest ghostel-test-resize-through-filter-pipeline ()
   "Full pipeline test: resize, then app response goes through filter path.
 The app's output enters the terminal via `ghostel--filter' and is

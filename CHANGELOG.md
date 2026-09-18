@@ -25,6 +25,12 @@ All notable changes to this project will be documented in this file.
   exits a read-only mode entered by leaving the buffer and returning, on
   entering char mode, and on leaving line mode.
   Fixes [#698](https://github.com/dakra/ghostel/issues/698).
+- A selection is deactivated when terminal output repaints the rows it
+  covers, instead of staying highlighted over replaced text.  The common
+  case is an alternate-screen program redrawing after a window resize.
+  The primary selection keeps the selected text; line mode, which
+  repaints the whole buffer on every redraw, is exempt.
+  Fixes [#704](https://github.com/dakra/ghostel/issues/704).
 
 ## [0.55.0] — 2026-09-17
 

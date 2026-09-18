@@ -688,8 +688,9 @@ Set one of those to override this choice for that trigger only."
 - `emacs': enter `ghostel-emacs-mode'.  Terminal output keeps
   streaming; the buffer is read-only.  Pick this when you do not
   want the terminal to pause for a selection.
-- nil: stay in semi-char.  Best-effort - the selection could get
-  clobbered by the next redraw, and `M-w' is not bound here.
+- nil: stay in semi-char.  `M-w' is not bound here.
+
+With `emacs' and nil, output repainting the selected rows deactivates it.
 
 Has no effect when terminal mouse input consumes the event, or
 when the buffer is not in semi-char-mode when the gesture
@@ -4438,6 +4439,22 @@ spans remain handled inside the renderer."
     (when (or ghostel-enable-url-detection ghostel-enable-file-detection)
       (ghostel--queue-plain-link-detection (car region) (cdr region)))))
 
+(defun ghostel--deactivate-repainted-region ()
+  "Deactivate the region when the last redraw rewrote part of it.
+Terminal output replaces text in place, so the selection would be left
+covering text the user never selected.  An empty region is kept,
+as is line mode's: it repaints the whole buffer on every redraw.
+The primary selection keeps the text that was actually selected."
+  (when-let* (((region-active-p))
+              ((not (eq ghostel--input-mode 'line)))
+              ((/= (region-beginning) (region-end)))
+              (repainted ghostel--repainted-region)
+              ((< (region-beginning) (cdr repainted)))
+              ((> (region-end) (car repainted))))
+    (with-demoted-errors "ghostel: deactivate-mark error: %S"
+      (let ((select-active-regions nil))
+        (deactivate-mark)))))
+
 (defun ghostel--daemon-dummy-frame-p (frame)
   "Non-nil if FRAME is the daemon's invisible initial frame.
 Killing a buffer can substitute a ghostel buffer into that frame's sole window.
@@ -4757,6 +4774,7 @@ them during synchronized output or when BUFFER has no render window."
                     (ghostel--write-pty ghostel--term input)
                     (message
                      "ghostel: line-mode prompt lost; input forwarded raw"))))
+              (when rendered (ghostel--deactivate-repainted-region))
               (ghostel--schedule-link-detection))
             ;; Resume line mode if alt-screen just turned off, and update the
             ;; alt-screen-prev cache for the next cycle.

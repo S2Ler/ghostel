@@ -1685,6 +1685,78 @@ check keeps semi-char mode."
       (ghostel-maybe-leave-input)
       (should (eq ghostel--input-mode 'semi-char)))))
 
+(ert-deftest ghostel-test-repainted-region-deactivates-overlapping-mark ()
+  "Output rewriting part of the region clears it with `select-active-regions' off."
+  (with-temp-buffer
+    (ghostel-mode)
+    (ghostel-test--insert-rendered "alpha\nbeta\ngamma\n")
+    (let ((transient-mark-mode t)         ; nil in batch
+          (ghostel-mark-activation-input-mode nil)
+          (select-active-regions t)
+          (sar-during-deactivate 'unset))
+      (set-mark (point-min))
+      (goto-char (+ (point-min) 5))
+      (add-hook 'deactivate-mark-hook
+                (lambda () (setq sar-during-deactivate select-active-regions))
+                nil t)
+      (setq ghostel--repainted-region (cons (+ (point-min) 3) (point-max)))
+      (ghostel--deactivate-repainted-region)
+      (should-not (region-active-p))
+      (should-not sar-during-deactivate))))
+
+(ert-deftest ghostel-test-repainted-region-boundaries ()
+  "The overlap test spares an empty region and a repaint outside it.
+Shell output appends below the selected rows, the common spared case."
+  ;; (MARK POINT REPAINT-BEG REPAINT-END STILL-ACTIVE)
+  (dolist (case '((4 4 2 10 t)           ; empty region inside the repaint
+                  (2 6 6 10 t)           ; repaint starts at the region end
+                  (6 10 2 6 t)           ; repaint ends at the region start
+                  (2 6 8 10 t)           ; repaint below the region
+                  (2 6 2 6 nil)          ; exact cover
+                  (2 10 4 6 nil)))       ; repaint strictly inside
+    (pcase-let ((`(,mark ,point ,rbeg ,rend ,active) case))
+      (with-temp-buffer
+        (ghostel-mode)
+        (ghostel-test--insert-rendered "alpha\nbeta\ngamma\n")
+        (let ((transient-mark-mode t)
+              (ghostel-mark-activation-input-mode nil))
+          (set-mark mark)
+          (goto-char point)
+          (setq ghostel--repainted-region (cons rbeg rend))
+          (ghostel--deactivate-repainted-region)
+          (should (eq active (region-active-p))))))))
+
+(ert-deftest ghostel-test-repainted-region-survives-signalling-hook ()
+  "A signalling `deactivate-mark-hook' does not escape into the redraw.
+ERT binds `debug-on-error' before Emacs 30, which stops
+`condition-case-unless-debug' from catching anything."
+  (with-temp-buffer
+    (ghostel-mode)
+    (ghostel-test--insert-rendered "alpha\nbeta\ngamma\n")
+    (let ((transient-mark-mode t)
+          (ghostel-mark-activation-input-mode nil)
+          (debug-on-error nil)
+          (inhibit-message t))
+      (set-mark (point-min))
+      (goto-char (+ (point-min) 5))
+      (add-hook 'deactivate-mark-hook (lambda () (error "Boom")) nil t)
+      (setq ghostel--repainted-region (cons (point-min) (point-max)))
+      (ghostel--deactivate-repainted-region)
+      (should-not (region-active-p)))))
+
+(ert-deftest ghostel-test-repainted-region-spares-line-mode ()
+  "Line mode keeps its selection: every redraw repaints the whole buffer."
+  (with-temp-buffer
+    (ghostel-mode)
+    (ghostel-test--insert-rendered "alpha\nbeta\ngamma\n")
+    (let ((transient-mark-mode t)
+          (ghostel--input-mode 'line))
+      (set-mark (point-min))
+      (goto-char (+ (point-min) 5))
+      (setq ghostel--repainted-region (cons (point-min) (point-max)))
+      (ghostel--deactivate-repainted-region)
+      (should (region-active-p)))))
+
 (ert-deftest ghostel-test-mode-commands-reject-non-ghostel-buffer ()
   "Input-mode commands signal `user-error' outside ghostel buffers.
 None of them may touch the buffer's local keymap or
