@@ -1078,7 +1078,7 @@ Pin a specific handler explicitly:
 :end:
 #+cindex: colors
 
-The 16 ANSI colors are defined as Emacs faces inheriting from =term-color-*=:
+The 16 ANSI colors are defined as Emacs faces inheriting from =ansi-color-*=:
 
 #+begin_example
 ghostel-color-black         ghostel-color-bright-black
@@ -1091,7 +1091,7 @@ ghostel-color-cyan          ghostel-color-bright-cyan
 ghostel-color-white         ghostel-color-bright-white
 #+end_example
 
-Themes that customize =term-color-*= faces automatically apply.  Customize
+Themes that customize =ansi-color-*= faces automatically apply.  Customize
 individual faces with =M-x customize-face=.
 
 Default text inherits from the =ghostel-default= face, which inherits from
@@ -1104,6 +1104,10 @@ font, or size than the rest of Emacs (e.g. a dark terminal inside a light Emacs)
                     :background "#1e1e2e"
                     :family "Iosevka Term")
 #+end_src
+
+Bold and italic text inherit the =ghostel-bold= and =ghostel-italic= faces,
+which inherit =ansi-color-bold= and =ansi-color-italic=, and through them
+Emacs's =bold= and =italic=.
 
 Bold text coloring follows =ghostel-bold-color= (nil = same color as normal text,
 =bright= = use the bright ANSI variant, or a fixed =#RRGGBB= string), matching

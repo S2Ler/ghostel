@@ -589,8 +589,8 @@ Sets floor to 1.0 and feeds a glyph larger than the cell.  With floor
                           (lambda (pos &optional _window string)
                             (cond
                              (string df)
-                             ((eq (plist-get (get-text-property pos 'face) :weight)
-                                  'bold)
+                             ((eq (plist-get (get-text-property pos 'face) :inherit)
+                                  'ghostel-bold)
                               bold-font)
                              (t normal-font))))
                          ((symbol-function 'composition-get-gstring)

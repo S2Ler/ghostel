@@ -892,7 +892,8 @@ resize is committed.")
 (defcustom ghostel-bold-color nil
   "Configure how bold text is colored.
 
-If nil (default), bold text uses the same color as normal text.
+If nil (default), bold text is left the color it would have without
+the bold attribute, and a foreground on `ghostel-bold' still applies.
 
 If `bright', bold text uses the bright version of the current
 foreground color (ANSI colors 0-7 map to 8-15).

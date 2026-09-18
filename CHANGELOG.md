@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- `ghostel-bold` and `ghostel-italic`, inheriting `ansi-color-bold` and
+  `ansi-color-italic`, now carry the bold and italic terminal attributes.
+  Bold and italic text follows those faces instead of a hardcoded weight
+  and slant, so softening `bold` for a light default face reaches
+  terminal output.
+  Fixes [#700](https://github.com/dakra/ghostel/issues/700).
+
 ### Fixed
 - A mouse selection left active with `ghostel-mouse-drag-input-mode` nil
   no longer grows to the prompt when the window is resized or output

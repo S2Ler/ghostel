@@ -128,7 +128,7 @@ computes as `(if r==0 0 else r*40+55)' per channel, giving #ff5f00."
                  state "\e[3;9mboth\e[0m"))
            (face (ghostel-comint-test--face-at out 0)))
       (should (equal out "both"))
-      (should (eq (plist-get face :slant) 'italic))
+      (should (eq (plist-get face :inherit) 'ghostel-italic))
       (should (eq (plist-get face :strike-through) t)))))
 
 

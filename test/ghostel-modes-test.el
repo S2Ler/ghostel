@@ -57,6 +57,16 @@ such as `buffer-face-mode'."
   (should (seq-every-p (lambda (attr) (eq (cdr attr) 'unspecified))
                        (face-all-attributes 'ghostel-default))))
 
+(ert-deftest ghostel-test-attribute-faces-exist ()
+  "The faces the renderer names in `:inherit' are defined.
+Emacs drops an `:inherit' naming an undefined face without complaint, so
+a rename on either side of the module boundary would silently stop bold
+and italic from rendering."
+  (should (facep 'ghostel-bold))
+  (should (facep 'ghostel-italic))
+  (should (eq 'ansi-color-bold (face-attribute 'ghostel-bold :inherit)))
+  (should (eq 'ansi-color-italic (face-attribute 'ghostel-italic :inherit))))
+
 (ert-deftest ghostel-test-buffer-face-mode-refits-terminal ()
   "`buffer-face-mode' resizes the terminal to the rescaled window.
 Its font change leaves the window's pixel geometry untouched, so

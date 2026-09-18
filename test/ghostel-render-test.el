@@ -2145,7 +2145,7 @@ Used by bold-color tests so palette mapping is observable."
             (goto-char (point-min))
             (let ((face (get-text-property (point) 'face)))
               (should (equal "#00ff00" (plist-get face :foreground)))
-              (should (eq 'bold (plist-get face :weight))))))
+              (should (eq 'ghostel-bold (plist-get face :inherit))))))
       (kill-buffer buf))))
 
 (ert-deftest ghostel-test-bold-fixed-color ()
@@ -2164,8 +2164,12 @@ Used by bold-color tests so palette mapping is observable."
             (ghostel--redraw term)
             (goto-char (point-min))
             (let ((face (get-text-property (point) 'face)))
+              ;; Emacs merges a plist's `:inherit' where it appears, so it
+              ;; must precede `:foreground' or a color on `ghostel-bold'
+              ;; would outrank `ghostel-bold-color'.
+              (should (eq :inherit (car face)))
               (should (equal "#abcdef" (plist-get face :foreground)))
-              (should (eq 'bold (plist-get face :weight))))))
+              (should (eq 'ghostel-bold (plist-get face :inherit))))))
       (kill-buffer buf))))
 
 (ert-deftest ghostel-test-bold-fixed-color-keeps-truecolor-fg ()
@@ -2183,7 +2187,23 @@ Used by bold-color tests so palette mapping is observable."
             (goto-char (point-min))
             (let ((face (get-text-property (point) 'face)))
               (should (equal "#112233" (plist-get face :foreground)))
-              (should (eq 'bold (plist-get face :weight))))))
+              (should (eq 'ghostel-bold (plist-get face :inherit))))))
+      (kill-buffer buf))))
+
+(ert-deftest ghostel-test-bold-italic-inherits-both-faces ()
+  "Bold and italic together inherit both faces, in one list."
+  :tags '(native)
+  (let ((buf (generate-new-buffer " *ghostel-test-bold-italic*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (let* ((term (ghostel--new 5 40 100))
+                 (inhibit-read-only t))
+            (ghostel--write-vt term "\e[1;3mBOTH\e[0m")
+            (ghostel--redraw term)
+            (goto-char (point-min))
+            (should (equal '(ghostel-bold ghostel-italic)
+                           (plist-get (get-text-property (point) 'face)
+                                      :inherit)))))
       (kill-buffer buf))))
 
 (ert-deftest ghostel-test-bold-color-nil-leaves-fg-alone ()
@@ -2203,7 +2223,7 @@ Used by bold-color tests so palette mapping is observable."
             (goto-char (point-min))
             (let ((face (get-text-property (point) 'face)))
               (should (equal "#ff0000" (plist-get face :foreground)))
-              (should (eq 'bold (plist-get face :weight))))))
+              (should (eq 'ghostel-bold (plist-get face :inherit))))))
       (kill-buffer buf))))
 
 (ert-deftest ghostel-test-bold-fixed-also-brightens-palette ()
@@ -2245,7 +2265,7 @@ the bright variant just like in `bright' mode."
             (goto-char (point-min))
             (let ((face (get-text-property (point) 'face)))
               (should (equal "#00ff00" (plist-get face :foreground)))
-              (should (eq 'bold (plist-get face :weight))))))
+              (should (eq 'ghostel-bold (plist-get face :inherit))))))
       (kill-buffer buf))))
 
 (ert-deftest ghostel-test-render-default-bg-omits-background ()
