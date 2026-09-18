@@ -4671,7 +4671,7 @@ line mode keeps the user's point."
                            (save-excursion
                              (goto-char target)
                              (forward-line
-                              (- (floor (window-screen-lines))))
+                              (- (if (bolp) 0 1) (floor (window-screen-lines))))
                              (list (point) 0))))
                (start (if (and cursor-bol (< cursor-bol (car anchor)))
                           cursor-bol

@@ -350,6 +350,19 @@ with TERM and must write MARK_TARGET, POINT_TARGET, and START_TARGET."
    (setq ghostel--term-cols 40)
    (ghostel--redraw term)))
 
+(ert-deftest ghostel-test-position-preservation-width-resize-full-redraw ()
+  "A full redraw carrying a pending width resize preserves positions.
+FULL erases the buffer before the resize commits; line mode always sets it.
+The rows are short enough not to rewrap: an erased buffer restores raw
+offsets, which soft-wrapped rows would shift."
+  :tags '(native)
+  (ghostel-test--with-position-preservation-case
+   (buf term 8 80 4000 (lambda (term)
+                         (ghostel-test--write-position-preservation-lines term 12)))
+   (ghostel--set-size term 8 40)
+   (setq ghostel--term-cols 40)
+   (ghostel--redraw term t)))
+
 (ert-deftest ghostel-test-position-preservation-height-resize-no-scrollback ()
   "Height resize on the primary screen preserves positions without scrollback."
   :tags '(native)

@@ -1013,8 +1013,9 @@ fn renderCursor(self: *Self, env: emacs.Env) !void {
 fn commitResize(self: *Self, env: emacs.Env) !void {
     if (self.pending_resize) |rz| {
         const cols_changed = rz.cols != self.term.cols;
-        // Pin our saved positions during resize
-        self.saved_markers.pin(self.term.screens.active, env);
+        // `bufferPosToPin` reads row numbers from the buffer;
+        // an erased one (`rows_in_buffer` 0) maps every position to row 0.
+        if (self.rows_in_buffer > 0) self.saved_markers.pin(self.term.screens.active, env);
 
         try self.term.resize(self.alloc, .{
             .cols = rz.cols,

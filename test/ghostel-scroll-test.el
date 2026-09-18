@@ -619,6 +619,20 @@ rows in the viewport — with or without the trailing newline."
         (should (equal "hello" sent-text))
         (should (> (window-start) (point-min))))))
 
+(ert-deftest ghostel-test-anchor-window-keeps-unterminated-last-row-visible ()
+  "Anchoring fits the last row when `point-max' has no trailing newline.
+Line mode trims the renderer's blank tail, leaving `point-max' at the end
+of the prompt row rather than at a line start."
+  :tags '(native)
+  (ghostel-test-scroll--with-buffer (buf term 10 40 200)
+    (ghostel-test-scroll--write-lines term "scroll" 60)
+    (ghostel--redraw term t)
+    (goto-char (ghostel-test-scroll--bottom-position))
+    (delete-region (line-end-position) (point-max))
+    (ghostel--anchor-window nil t)
+    (should (= (floor (window-screen-lines))
+               (count-lines (window-start) (point-max))))))
+
 (ert-deftest ghostel-test-anchor-window-inhibit-functions-veto ()
   "`ghostel-inhibit-anchor-functions' vetoes anchoring per window.
 A non-nil-returning hook (honoring FORCE) leaves both point and the viewport
