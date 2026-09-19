@@ -4,7 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.56.0] — 2026-09-19
+
 ### Added
+- A Ghostel menu-bar menu: input-mode switching as a radio group, signals,
+  prompt and link navigation, clipboard and screen commands, terminal
+  buffer management, and the debug commands.  Reachable from every input
+  mode.
 - `ghostel-bold` and `ghostel-italic`, inheriting `ansi-color-bold` and
   `ansi-color-italic`, now carry the bold and italic terminal attributes.
   Bold and italic text follows those faces instead of a hardcoded weight
@@ -37,6 +43,10 @@ All notable changes to this project will be documented in this file.
   The primary selection keeps the selected text; line mode, which
   repaints the whole buffer on every redraw, is exempt.
   Fixes [#704](https://github.com/dakra/ghostel/issues/704).
+- Line mode keeps point, window starts and the mark where they were when a
+  window is resized over a long scrollback, instead of dropping point into
+  the middle of the window or back to the top of the buffer.
+  Fixes [#699](https://github.com/dakra/ghostel/issues/699).
 
 ## [0.55.0] — 2026-09-17
 
