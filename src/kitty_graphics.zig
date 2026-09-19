@@ -71,7 +71,7 @@ fn emitVirtualRun(
     const pin_screen = t.screens.active.pages.pointFromPin(.screen, run.pin) orelse return error.NotVisible;
 
     const val = images.get(run.image_id) orelse val: {
-        const data = try getImageData(term.alloc, image);
+        const data = try getImageData(term.alloc, image, ppm.Rect.full(image.width, image.height));
         defer term.alloc.free(data);
         const v = env.makeUnibyteString(data) orelse return error.MakeString;
         try images.put(term.alloc, run.image_id, v);
@@ -157,7 +157,9 @@ fn emitPinned(
 
     if (!visible) return error.NotVisible;
 
-    const data = try getImageData(term.alloc, image);
+    // Emacs crops only post-scale, so crop before it sees the pixels.
+    const src = placement.sourceRect(image.*);
+    const data = try getImageData(term.alloc, image, .{ .x = src.x, .y = src.y, .width = src.width, .height = src.height });
     defer term.alloc.free(data);
 
     const img_val = env.makeUnibyteString(data) orelse return error.MakeString;
@@ -169,15 +171,11 @@ fn emitPinned(
         grid_size.rows,
         pixel_size.width,
         pixel_size.height,
-        @min(placement.source_x, image.width),
-        @min(placement.source_y, image.height),
-        placement.source_width,
-        placement.source_height,
     });
 }
 
-/// PPM bytes for Emacs, owned by `alloc`.
-fn getImageData(alloc: Allocator, image: *const gt.kitty.graphics.Image) ![]const u8 {
+/// PPM bytes of the RECT sub-rectangle of IMAGE, owned by `alloc`.
+fn getImageData(alloc: Allocator, image: *const gt.kitty.graphics.Image, rect: ppm.Rect) ![]const u8 {
     // Decompression happens at transmit time; anything else is a libghostty change.
     if (image.compression != .none) return error.UnsupportedCompression;
     // Chunked transmissions still in flight have no complete bytes yet.
@@ -192,5 +190,5 @@ fn getImageData(alloc: Allocator, image: *const gt.kitty.graphics.Image) ![]cons
         .gray_alpha => 2,
         .gray => 1,
     };
-    return ppm.createPpm(alloc, data, image.width, image.height, channels) orelse error.PpmConvert;
+    return ppm.createPpm(alloc, data, image.width, image.height, channels, rect) orelse error.PpmConvert;
 }

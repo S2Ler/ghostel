@@ -72,25 +72,6 @@ inspected when image rendering misbehaves.")
     (when (memq 'shared-mem mediums) (setq bits (logior bits 4)))
     bits))
 
-(define-error 'ghostel-kitty-unsupported-source-rect
-              "Kitty graphics atlas-style source rect not supported"
-              'error)
-
-(defun ghostel--kitty-check-source-rect (src-x src-y src-w src-h pixel-w pixel-h)
-  "Signal `ghostel-kitty-unsupported-source-rect' for non-default crops.
-SRC-X / SRC-Y / SRC-W / SRC-H are the requested source-rect crop in image
-pixels; PIXEL-W / PIXEL-H are the rendered pixel dimensions.  All zeros
-means the whole image (the common case from timg/yazi).
-
-Atlas-style placements (sub-region of the source image) aren't supported
-because Emacs's image system can't crop pre-scale; refuse explicitly so
-mis-rendering is visible as an error instead of silent."
-  (when (or (> src-x 0) (> src-y 0)
-            (and (> src-w 0) (/= src-w pixel-w))
-            (and (> src-h 0) (/= src-h pixel-h)))
-    (signal 'ghostel-kitty-unsupported-source-rect
-            (list src-x src-y src-w src-h pixel-w pixel-h))))
-
 (defun ghostel--kitty-apply-row-slice (row cw ch img
                                            vp-col-clamped visible-cols
                                            slice-x slice-w)
@@ -138,19 +119,16 @@ the buffer line is long enough to hold the placement's column range."
                            (list 'line-height ch 'ghostel-kitty t)))
     (setq ghostel--kitty-active t)))
 
-(defun ghostel--kitty-display-image (data abs-row vp-col grid-cols grid-rows pixel-w pixel-h
-                                          src-x src-y src-w src-h)
+(defun ghostel--kitty-display-image (data abs-row vp-col grid-cols grid-rows pixel-w pixel-h)
   "Display a kitty graphics image placement in the buffer.
 Called from the native module during redraw for each visible placement.
-DATA is a unibyte PPM string.
+DATA is a unibyte PPM string of the placement's source rect.
 ABS-ROW is the buffer row (0-indexed from `point-min') of the image's
 top: libghostty's screen row, which the renderer keeps equal to the
 buffer line.  May be negative when the top is above the first line.
 VP-COL is the column (may be negative — image partially off the left).
 GRID-COLS and GRID-ROWS are the cell dimensions.
 PIXEL-W and PIXEL-H are the rendered pixel dimensions.
-SRC-X / SRC-Y / SRC-W / SRC-H are the source-rect crop in image pixels;
-all zero means the whole image (the common case from timg/yazi).
 
 The image is sized to fill its grid cells and then sliced per row, with
 each slice applied on its own buffer line.  Slicing — rather than a
@@ -167,50 +145,48 @@ after a placement (a subsequent layout change would fix it, but the
 user shouldn't have to trigger one)."
   (when (display-graphic-p)
     (condition-case err
-        (progn
-          (ghostel--kitty-check-source-rect src-x src-y src-w src-h pixel-w pixel-h)
-          (let* ((cw (default-font-width))
-                 (ch (default-font-height))
-                 (g-cols (if (> grid-cols 0) grid-cols
-                           (max 1 (/ (+ pixel-w cw -1) cw))))
-                 (g-rows (if (> grid-rows 0) grid-rows
-                           (max 1 (/ (+ pixel-h ch -1) ch))))
-                 (img (create-image data 'pbm t
-                                    :width (* g-cols cw)
-                                    :height (* g-rows ch)
-                                    :scale 1
-                                    :ascent 'center))
-                 (skip (max 0 abs-row))
-                 (start-row (max 0 (- abs-row)))
-                 ;; Clamp negative vp-col (image partially scrolled off
-                 ;; the left edge): start the buffer range at column 0
-                 ;; and skip the off-screen pixel columns inside the
-                 ;; slice.
-                 (vp-col-clamped (max 0 vp-col))
-                 (start-col (max 0 (- vp-col)))
-                 (slice-x (* start-col cw))
-                 (visible-cols (max 0 (- g-cols start-col)))
-                 (slice-w (* visible-cols cw)))
-            (when (> visible-cols 0)
-              (save-excursion
-                (goto-char (point-min))
-                (when (zerop (forward-line skip))
-                  ;; Skip rows already in materialized scrollback — they
-                  ;; got their overlays in an earlier emit and
-                  ;; `kitty-clear' preserves scrollback overlays.
-                  ;; Re-applying here would stack a second overlay on
-                  ;; every scrolled-in row.
-                  (let ((row start-row)
-                        (more t)
-                        (vp-start (or (ghostel--viewport-start) (point-min))))
-                    (while (and more (< row g-rows))
-                      (when (>= (point) vp-start)
-                        (ghostel--kitty-apply-row-slice
-                         row cw ch img
-                         vp-col-clamped visible-cols slice-x slice-w))
-                      (setq row (1+ row))
-                      (unless (zerop (forward-line 1))
-                        (setq more nil)))))))))
+        (let* ((cw (default-font-width))
+               (ch (default-font-height))
+               (g-cols (if (> grid-cols 0) grid-cols
+                         (max 1 (/ (+ pixel-w cw -1) cw))))
+               (g-rows (if (> grid-rows 0) grid-rows
+                         (max 1 (/ (+ pixel-h ch -1) ch))))
+               (img (create-image data 'pbm t
+                                  :width (* g-cols cw)
+                                  :height (* g-rows ch)
+                                  :scale 1
+                                  :ascent 'center))
+               (skip (max 0 abs-row))
+               (start-row (max 0 (- abs-row)))
+               ;; Clamp negative vp-col (image partially scrolled off
+               ;; the left edge): start the buffer range at column 0
+               ;; and skip the off-screen pixel columns inside the
+               ;; slice.
+               (vp-col-clamped (max 0 vp-col))
+               (start-col (max 0 (- vp-col)))
+               (slice-x (* start-col cw))
+               (visible-cols (max 0 (- g-cols start-col)))
+               (slice-w (* visible-cols cw)))
+          (when (> visible-cols 0)
+            (save-excursion
+              (goto-char (point-min))
+              (when (zerop (forward-line skip))
+                ;; Skip rows already in materialized scrollback — they
+                ;; got their overlays in an earlier emit and
+                ;; `kitty-clear' preserves scrollback overlays.
+                ;; Re-applying here would stack a second overlay on
+                ;; every scrolled-in row.
+                (let ((row start-row)
+                      (more t)
+                      (vp-start (or (ghostel--viewport-start) (point-min))))
+                  (while (and more (< row g-rows))
+                    (when (>= (point) vp-start)
+                      (ghostel--kitty-apply-row-slice
+                       row cw ch img
+                       vp-col-clamped visible-cols slice-x slice-w))
+                    (setq row (1+ row))
+                    (unless (zerop (forward-line 1))
+                      (setq more nil))))))))
       (error
        (setq ghostel--kitty-last-error err)
        (message "ghostel: kitty image error: %S" err)))))

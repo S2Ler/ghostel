@@ -76,6 +76,22 @@ slice's x-origin and width in the image divided by the cell width."
                 slices))))
     (nreverse slices)))
 
+(defun ghostel-elate--kitty-data ()
+  "Return the distinct PPM `:data' strings of the kitty slices, in cell order."
+  (let (data)
+    (dolist (cell (ghostel-elate--kitty-cells))
+      (save-excursion
+        (goto-char (point-min))
+        (forward-line (1- (car cell)))
+        (move-to-column (cdr cell))
+        (let* ((ov (seq-find (lambda (o) (overlay-get o 'ghostel-kitty))
+                             (overlays-in (point) (point))))
+               (spec (if ov
+                         (get-text-property 0 'display (overlay-get ov 'before-string))
+                       (get-text-property (point) 'display))))
+          (push (image-property (nth 1 spec) :data) data))))
+    (delete-dups (nreverse data))))
+
 (defun ghostel-elate--has-line (regexp)
   "Non-nil when a whole buffer line matches REGEXP."
   (save-excursion

@@ -261,6 +261,50 @@
         "eval": "(let* ((cw (default-font-width)) (all (ghostel-elate--kitty-cells)) (line (car (car (last all)))) (cells (seq-filter (lambda (c) (= (car c) line)) all)) (pos (lambda (c) (save-excursion (goto-char (point-min)) (forward-line (1- (car c))) (move-to-column (cdr c)) (point)))) (p1 (funcall pos (nth 0 cells))) (p2 (funcall pos (nth 1 cells))) (e1 (next-single-property-change p1 'ghostel-kitty nil p2)) (spec1 (get-text-property p1 'display)) (spec2 (get-text-property p2 'display))) (and (= (length cells) 2) (= (/ (nth 3 (car spec1)) cw) 2) (= (/ (nth 3 (car spec2)) cw) 2) (equal (buffer-substring-no-properties e1 p2) \"xy\") (not (get-text-property e1 'display)) (not (equal (image-property (nth 1 spec1) :data) (image-property (nth 1 spec2) :data)))))",
         "buffer": "*ghostel*"
       }
+    },
+    {
+      "group": "source-rect",
+      "comment": "a 2x2 image (red, blue / green, white) placed scale-to-fit with its full size as the source rect (x=0,y=0,w=2,h=2,c=4,r=2) renders every pixel; a real crop (x=1,y=0,w=1,h=1,c=2,r=1) hands Emacs only the blue pixel"
+    },
+    {
+      "eval": "(ghostel-elate--vt \"\u001b_Ga=d,d=A,q=2\u001b\\\\0123456789\\n0123456789\\n\u001b[2A\u001b_Ga=t,i=6,f=24,s=2,v=2,q=2;/wAAAAD/AP8A////\u001b\\\\\u001b_Ga=p,i=6,p=1,x=0,y=0,w=2,h=2,c=4,r=2,q=2\u001b\\\\\u001b[2B\" \"k8-done\")"
+    },
+    {
+      "wait": "text",
+      "pattern": "k8-done",
+      "buffer": "*ghostel*",
+      "timeout": 10
+    },
+    {
+      "wait": "idle",
+      "min_idle": 0.5,
+      "timeout": 10
+    },
+    {
+      "assert": {
+        "eval": "(let ((tail (last (ghostel-elate--kitty-slices) 2))) (and (equal (mapcar #'cdr tail) '((0 0 4) (0 0 4))) (= (car (nth 1 tail)) (1+ (car (nth 0 tail)))) (equal (car (last (ghostel-elate--kitty-data))) \"P6\\n2 2\\n255\\n\\377\\0\\0\\0\\0\\377\\0\\377\\0\\377\\377\\377\") (not ghostel--kitty-last-error)))",
+        "buffer": "*ghostel*"
+      }
+    },
+    {
+      "eval": "(ghostel-elate--vt \"\u001b_Ga=d,d=a,q=2\u001b\\\\0123456789\\n\u001b[1A\u001b_Ga=p,i=6,p=2,x=1,y=0,w=1,h=1,c=2,r=1,q=2\u001b\\\\\u001b[1B\" \"k8-crop\")"
+    },
+    {
+      "wait": "text",
+      "pattern": "k8-crop",
+      "buffer": "*ghostel*",
+      "timeout": 10
+    },
+    {
+      "wait": "idle",
+      "min_idle": 0.5,
+      "timeout": 10
+    },
+    {
+      "assert": {
+        "eval": "(and (equal (cdr (car (last (ghostel-elate--kitty-slices)))) '(0 0 2)) (equal (car (last (ghostel-elate--kitty-data))) \"P6\\n1 1\\n255\\n\\0\\0\\377\") (not ghostel--kitty-last-error))",
+        "buffer": "*ghostel*"
+      }
     }
   ]
 }

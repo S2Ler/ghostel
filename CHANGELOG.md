@@ -13,6 +13,12 @@ All notable changes to this project will be documented in this file.
   Fixes [#700](https://github.com/dakra/ghostel/issues/700).
 
 ### Fixed
+- Kitty graphics placements with a source rect (`x`, `y`, `w`, `h`) show
+  that sub-image.  Every such placement was refused on each redraw with
+  `ghostel-kitty-unsupported-source-rect`, including scale-to-fit previews
+  that spell out the full image size.  A placement clipped by a scroll
+  inside a margin region shows its visible part.
+  Fixes [#706](https://github.com/dakra/ghostel/issues/706).
 - A mouse selection left active with `ghostel-mouse-drag-input-mode` nil
   no longer grows to the prompt when the window is resized or output
   arrives: a window whose buffer holds an active region no longer follows

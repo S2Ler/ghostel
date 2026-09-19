@@ -954,10 +954,6 @@ Wayland with fractional scaling or non-standard DPI), set an explicit number.
   path).  Transparent pixels render as whatever the underlying color value
   happens to be (most decoders emit black).  Acceptable for thumbnails and
   screenshots; not ideal for icons with semi-transparent edges.
-- *Source-rect cropping is not supported.*  Atlas-style placements that specify a
-  sub-region of the source image (=x=, =y=, =w=, =h= in the kitty protocol) are
-  refused with an explicit error rather than silently mis-rendering.  Full-image
-  placements - what timg, yazi, and =kitty +kitten icat= use - are unaffected.
 - *Virtual placements are stretched to their cell grid.*  A unicode-placeholder
   placement whose =c=/=r= grid has a different aspect ratio than the image is
   scaled to fill the grid, where kitty and Ghostty letterbox it.  =yazi= and

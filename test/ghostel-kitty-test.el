@@ -116,7 +116,7 @@ The display property and the marker share the same range."
   (ghostel-test--kitty-fixture
    (lambda ()
 	 (insert "row1xx\nrow2xx\n")
-	 (ghostel--kitty-display-image "data" 0 0 4 2 32 32 0 0 0 0)
+	 (ghostel--kitty-display-image "data" 0 0 4 2 32 32)
 	 ;; Both rows should have a display property covering them
 	 (should (get-text-property 1 'display))
 	 (should (get-text-property 1 'ghostel-kitty))
@@ -138,7 +138,7 @@ tiles them at the wrong scale once the `default' face is remapped."
                 ((symbol-function 'default-font-width) (lambda () 8))
                 ((symbol-function 'default-font-height) (lambda () 16)))
         (insert "row1xx\nrow2xx\n")
-        (ghostel--kitty-display-image "data" 0 0 4 2 32 32 0 0 0 0)
+        (ghostel--kitty-display-image "data" 0 0 4 2 32 32)
         (let ((props (nthcdr 3 image-args)))
           (should (= (plist-get props :width) 32))    ; 4 cols * 8
           (should (= (plist-get props :height) 32)))  ; 2 rows * 16
@@ -151,7 +151,7 @@ tiles them at the wrong scale once the `default' face is remapped."
   (ghostel-test--kitty-fixture
    (lambda ()
 	 (insert "\n\n")
-	 (ghostel--kitty-display-image "data" 0 5 4 1 32 16 0 0 0 0)
+	 (ghostel--kitty-display-image "data" 0 5 4 1 32 16)
 	 (let ((ovs (cl-remove-if-not
 				 (lambda (ov) (overlay-get ov 'ghostel-kitty))
 				 (overlays-in (point-min) (point-max)))))
@@ -168,7 +168,7 @@ must survive a clear."
 	 ;; Apply an unrelated display property (e.g. wide-char comp).
 	 (put-text-property 1 3 'display "PRESERVED")
 	 ;; Apply kitty image.
-	 (ghostel--kitty-display-image "data" 0 3 3 2 24 32 0 0 0 0)
+	 (ghostel--kitty-display-image "data" 0 3 3 2 24 32)
 	 (should ghostel--kitty-active)
 	 (ghostel--kitty-clear)
 	 ;; Unrelated display survives.
@@ -380,7 +380,7 @@ overlays per row by the number of times the image has been visible."
 	 ;; Re-emit the same placement (image now spans scrollback + viewport).
 	 ;; abs-row=0 means image starts at line 1, grid-rows=4 means it
 	 ;; covers lines 1..4 — all of which are in scrollback.
-	 (ghostel--kitty-display-image "data" 0 0 4 4 32 64 0 0 0 0)
+	 (ghostel--kitty-display-image "data" 0 0 4 4 32 64)
 	 ;; Each scrollback row should still have exactly ONE overlay (the
 	 ;; pre-existing one from the earlier emit).
 	 (save-excursion
@@ -450,23 +450,30 @@ The error survives past the redraw — not just flashed via `message'."
      (cl-letf (((symbol-function 'create-image)
                 (lambda (&rest _) (error "Boom"))))
        (insert "row\n")
-       (ghostel--kitty-display-image "data" 0 0 1 1 8 16 0 0 0 0)
+       (ghostel--kitty-display-image "data" 0 0 1 1 8 16)
        (should ghostel--kitty-last-error)
        (should (eq (car ghostel--kitty-last-error) 'error))))))
 
-(ert-deftest ghostel-test-kitty-display-image-rejects-source-rect ()
-  "Non-default source rect is recorded as an error rather than silent miss.
-Emacs's image system can't crop pre-scale, so any atlas-style placement
-should fail visibly."
-  (ghostel-test--kitty-fixture
-   (lambda ()
-	 (insert "row1xx\nrow2xx\n")
-	 ;; src-w=16 != pixel-w=32 → atlas-style sub-rect.
-	 (ghostel--kitty-display-image "data" 0 0 4 2 32 32 0 0 16 32)
-	 (should ghostel--kitty-last-error)
-	 ;; The signaled symbol appears in the err data.
-	 (should (memq 'ghostel-kitty-unsupported-source-rect
-				   (flatten-list ghostel--kitty-last-error))))))
+(ert-deftest ghostel-test-kitty-graphics-emit-crops-source-rect ()
+  "A placement's source rect reaches Elisp as an already-cropped PPM."
+  :tags '(native)
+  (let ((buf (generate-new-buffer " *ghostel-test-kitty-crop*"))
+        (calls nil))
+    (unwind-protect
+        (with-current-buffer buf
+          (let ((term (ghostel--new 5 40 1000))
+                (inhibit-read-only t))
+            (ghostel--set-size term 5 40 1 1)
+            (cl-letf (((symbol-function 'ghostel--kitty-display-image)
+                       (lambda (&rest args) (push args calls)))
+                      ((symbol-function 'display-graphic-p) (lambda () t)))
+              (ghostel--write-vt term ghostel-test--kitty-png-2x2)
+              ;; Top-right pixel of the fixture is blue.
+              (ghostel--write-vt term "\e_Ga=p,i=1,x=1,y=0,w=1,h=1,q=1\e\\")
+              (ghostel--redraw term t))
+            (should calls)
+            (should (equal (car (car calls)) "P6\n1 1\n255\n\0\0\377"))))
+      (kill-buffer buf))))
 
 (ert-deftest ghostel-test-kitty-display-image-clamps-negative-vp-col ()
   "Image partially scrolled off the left renders the visible portion.
@@ -477,7 +484,7 @@ would write properties to the previous line."
    (lambda ()
 	 (insert "abcdefghij\nabcdefghij\n")
 	 ;; vp-col = -2: 2 columns scrolled off, 2 visible (g-cols=4).
-	 (ghostel--kitty-display-image "data" 0 -2 4 1 32 16 0 0 0 0)
+	 (ghostel--kitty-display-image "data" 0 -2 4 1 32 16)
 	 (should ghostel--kitty-active)
 	 (should-not ghostel--kitty-last-error)
 	 ;; Display property should land at column 0..2 of the placement
@@ -490,7 +497,7 @@ would write properties to the previous line."
    (lambda ()
 	 (insert "abc\nabc\n")
 	 ;; g-cols=4, vp-col=-5 → start-col=5 > g-cols → visible-cols=0.
-	 (ghostel--kitty-display-image "data" 0 -5 4 1 32 16 0 0 0 0)
+	 (ghostel--kitty-display-image "data" 0 -5 4 1 32 16)
 	 (should-not ghostel--kitty-active)
 	 (should-not ghostel--kitty-last-error))))
 
@@ -527,8 +534,7 @@ now we verify only the arguments the native module hands off."
 			  (ghostel--redraw term t))
 			(should calls)
 			(let ((args (car calls)))
-			  ;; (data abs-row vp-col grid-cols grid-rows
-			  ;;  pixel-w pixel-h src-x src-y src-w src-h)
+			  ;; (data abs-row vp-col grid-cols grid-rows pixel-w pixel-h)
 			  (should (stringp (nth 0 args)))
 			  ;; PPM header starts with "P6" — we converted RGB→PPM in
 			  ;; the Zig layer.

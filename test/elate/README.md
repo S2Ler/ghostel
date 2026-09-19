@@ -178,7 +178,10 @@ geometry, and `ghostel-elate--has-line` is a whole-line regexp search.
   `evict` (a placement whose rows left the scrollback limit does not reappear at the
   top of the viewport), `virtual-flood` (a 3-row virtual placement pushed into
   scrollback by 40 trailing lines in one feed stays fully tagged), `virtual-two-images`
-  (two placeholder runs on one line resolve to their own image each).
+  (two placeholder runs on one line resolve to their own image each), `source-rect`
+  (a scale-to-fit placement naming its full size as the source rect renders every
+  pixel; a sub-rect placement hands Emacs only the cropped pixels, checked on the
+  slice's PPM `:data`).
 - `matrix/scrollback-ghostel.json` -- TTY, 60x24. Retention is floored at ~2 standard
   pages regardless of `ghostel-max-scrollback` (ghostty clamps the byte limit up).
   Groups: `evict` (5000 rows: oldest gone, newest kept, buffer bounded),
