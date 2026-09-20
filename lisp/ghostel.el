@@ -5110,6 +5110,8 @@ may change freely (`ghostel-compile' finalize relies on this)."
   (setq-local hscroll-margin 0)
   (setq-local truncate-lines t)
   (setq-local scroll-conservatively 101)
+  ;; NBSP is ordinary terminal padding; don't let `nobreak-space' repaint it.
+  (setq-local nobreak-char-display nil)
   (setq-local line-spacing ghostel-line-spacing)
   ;; Shield row geometry from a global `default-text-properties':
   ;; `line-spacing'/`line-height' properties supplied through its fallback
