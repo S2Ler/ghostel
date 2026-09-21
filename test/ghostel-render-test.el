@@ -350,6 +350,19 @@ with TERM and must write MARK_TARGET, POINT_TARGET, and START_TARGET."
    (setq ghostel--term-cols 40)
    (ghostel--redraw term)))
 
+(ert-deftest ghostel-test-position-preservation-width-resize-full-redraw ()
+  "A full redraw carrying a pending width resize preserves positions.
+FULL erases the buffer before the resize commits; line mode always sets it.
+The rows are short enough not to rewrap: an erased buffer restores raw
+offsets, which soft-wrapped rows would shift."
+  :tags '(native)
+  (ghostel-test--with-position-preservation-case
+   (buf term 8 80 4000 (lambda (term)
+                         (ghostel-test--write-position-preservation-lines term 12)))
+   (ghostel--set-size term 8 40)
+   (setq ghostel--term-cols 40)
+   (ghostel--redraw term t)))
+
 (ert-deftest ghostel-test-position-preservation-height-resize-no-scrollback ()
   "Height resize on the primary screen preserves positions without scrollback."
   :tags '(native)
@@ -1897,6 +1910,53 @@ app redraws all rows at new width via the filter pipeline."
                 (delete-process proc)))))
       (kill-buffer buf))))
 
+(ert-deftest ghostel-test-alt-screen-resize-drops-stale-selection ()
+  "A selection over an alt-screen row dies when the app repaints it.
+Resizing makes a TUI redraw its whole screen, so the region would be
+left highlighting text the user never selected (#704)."
+  :tags '(native)
+  (let ((buf (generate-new-buffer " *ghostel-test-stale-selection*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (set-window-buffer (selected-window) (current-buffer))
+          (ghostel-mode)
+          (setq ghostel--term (ghostel--new 10 40 100))
+          (let* ((ghostel-mark-activation-input-mode nil)
+                 (transient-mark-mode t)  ; nil in batch
+                 (proc (ghostel-test--dummy-process "ghostel-test-sel" buf))
+                 (ghostel--process proc))
+            (unwind-protect
+                (progn
+                  (ghostel--write-vt ghostel--term "\e[?1049h\e[H\e[2J")
+                  (dotimes (i 8)
+                    (ghostel--write-vt ghostel--term
+                                       (format "\e[%d;1HOLD-R%02d" (1+ i) i)))
+                  (ghostel--redraw-now buf)
+
+                  ;; Select the third row.
+                  (goto-char (point-min))
+                  (forward-line 2)
+                  (set-mark (point))
+                  (end-of-line)
+                  (should (equal "OLD-R02" (buffer-substring-no-properties
+                                            (region-beginning) (region-end))))
+
+                  ;; Resize, then let the app repaint every row.
+                  (ghostel--set-size ghostel--term 6 40)
+                  (setq ghostel--force-next-redraw t)
+                  (ghostel--filter
+                   proc (concat "\e[H\e[2J"
+                                (mapconcat
+                                 (lambda (i) (format "\e[%d;1HNEW-R%02d" (1+ i) i))
+                                 (number-sequence 0 5) "")))
+                  (ghostel--redraw-now buf)
+
+                  (should (string-match-p "NEW-R00" (buffer-string)))
+                  (should-not (region-active-p)))
+              (when (process-live-p proc)
+                (delete-process proc)))))
+      (kill-buffer buf))))
+
 (ert-deftest ghostel-test-resize-through-filter-pipeline ()
   "Full pipeline test: resize, then app response goes through filter path.
 The app's output enters the terminal via `ghostel--filter' and is
@@ -2145,7 +2205,7 @@ Used by bold-color tests so palette mapping is observable."
             (goto-char (point-min))
             (let ((face (get-text-property (point) 'face)))
               (should (equal "#00ff00" (plist-get face :foreground)))
-              (should (eq 'bold (plist-get face :weight))))))
+              (should (eq 'ghostel-bold (plist-get face :inherit))))))
       (kill-buffer buf))))
 
 (ert-deftest ghostel-test-bold-fixed-color ()
@@ -2164,8 +2224,12 @@ Used by bold-color tests so palette mapping is observable."
             (ghostel--redraw term)
             (goto-char (point-min))
             (let ((face (get-text-property (point) 'face)))
+              ;; Emacs merges a plist's `:inherit' where it appears, so it
+              ;; must precede `:foreground' or a color on `ghostel-bold'
+              ;; would outrank `ghostel-bold-color'.
+              (should (eq :inherit (car face)))
               (should (equal "#abcdef" (plist-get face :foreground)))
-              (should (eq 'bold (plist-get face :weight))))))
+              (should (eq 'ghostel-bold (plist-get face :inherit))))))
       (kill-buffer buf))))
 
 (ert-deftest ghostel-test-bold-fixed-color-keeps-truecolor-fg ()
@@ -2183,7 +2247,23 @@ Used by bold-color tests so palette mapping is observable."
             (goto-char (point-min))
             (let ((face (get-text-property (point) 'face)))
               (should (equal "#112233" (plist-get face :foreground)))
-              (should (eq 'bold (plist-get face :weight))))))
+              (should (eq 'ghostel-bold (plist-get face :inherit))))))
+      (kill-buffer buf))))
+
+(ert-deftest ghostel-test-bold-italic-inherits-both-faces ()
+  "Bold and italic together inherit both faces, in one list."
+  :tags '(native)
+  (let ((buf (generate-new-buffer " *ghostel-test-bold-italic*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (let* ((term (ghostel--new 5 40 100))
+                 (inhibit-read-only t))
+            (ghostel--write-vt term "\e[1;3mBOTH\e[0m")
+            (ghostel--redraw term)
+            (goto-char (point-min))
+            (should (equal '(ghostel-bold ghostel-italic)
+                           (plist-get (get-text-property (point) 'face)
+                                      :inherit)))))
       (kill-buffer buf))))
 
 (ert-deftest ghostel-test-bold-color-nil-leaves-fg-alone ()
@@ -2203,7 +2283,7 @@ Used by bold-color tests so palette mapping is observable."
             (goto-char (point-min))
             (let ((face (get-text-property (point) 'face)))
               (should (equal "#ff0000" (plist-get face :foreground)))
-              (should (eq 'bold (plist-get face :weight))))))
+              (should (eq 'ghostel-bold (plist-get face :inherit))))))
       (kill-buffer buf))))
 
 (ert-deftest ghostel-test-bold-fixed-also-brightens-palette ()
@@ -2245,7 +2325,7 @@ the bright variant just like in `bright' mode."
             (goto-char (point-min))
             (let ((face (get-text-property (point) 'face)))
               (should (equal "#00ff00" (plist-get face :foreground)))
-              (should (eq 'bold (plist-get face :weight))))))
+              (should (eq 'ghostel-bold (plist-get face :inherit))))))
       (kill-buffer buf))))
 
 (ert-deftest ghostel-test-render-default-bg-omits-background ()

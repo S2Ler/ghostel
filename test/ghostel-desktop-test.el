@@ -208,18 +208,20 @@ kind itself gates the respawn."
                          (project-root . "~/desk-compile/")
                          (instance . 1)))))))
 
-(ert-deftest ghostel-test-desktop-restore-skips-missing-directory ()
-  "A saved directory that no longer exists is skipped.
-On the native-PTY path the child's chdir failure would kill the shell
-right after spawn, silently losing the restored buffer."
-  (cl-letf (((symbol-function 'ghostel--create)
-             (lambda (&rest _)
-               (ert-fail "Spawned a shell in a missing directory"))))
-    (should-not (ghostel-desktop-restore-buffer
-                 nil " *ghostel-desk-gone*"
-                 (list (expand-file-name "ghostel-desk-gone-nonexistent/"
-                                         temporary-file-directory)
-                       '((kind . term) (instance . 1)))))))
+(ert-deftest ghostel-test-desktop-restore-missing-directory-errors ()
+  "A saved directory that no longer exists signals, leaving no buffer."
+  (cl-letf (((symbol-function 'ghostel--load-module) #'ignore)
+            ((symbol-function 'ghostel--new) (lambda (&rest _) 'fake-term))
+            ((symbol-function 'ghostel--set-size) #'ignore)
+            ((symbol-function 'ghostel--apply-palette) #'ignore)
+            ((symbol-function 'ghostel--start-process) #'ignore))
+    (should-error (ghostel-desktop-restore-buffer
+                   nil " *ghostel-desk-gone*"
+                   (list (expand-file-name "ghostel-desk-gone-nonexistent/"
+                                           temporary-file-directory)
+                         '((kind . term) (instance . 1))))
+                  :type 'user-error)
+    (should-not (get-buffer " *ghostel-desk-gone*"))))
 
 (ert-deftest ghostel-test-desktop-restore-reuses-live-remote ()
   "A live remote terminal matching the identity is reused, not skipped.

@@ -144,6 +144,19 @@ pub fn buildFacePlist(
 
     const s = &emacs.sym;
 
+    // `:inherit' first: Emacs merges it where it appears, so later
+    // attributes win over the inherited face.
+    if (style.flags.bold and style.flags.italic) {
+        try face_props.append(s.@":inherit");
+        try face_props.append(env.funcall(s.list, &.{ s.@"ghostel-bold", s.@"ghostel-italic" }));
+    } else if (style.flags.bold) {
+        try face_props.append(s.@":inherit");
+        try face_props.append(s.@"ghostel-bold");
+    } else if (style.flags.italic) {
+        try face_props.append(s.@":inherit");
+        try face_props.append(s.@"ghostel-italic");
+    }
+
     const fg = resolveForeground(style, palette, bold_config);
     const bg = resolveColor(palette, style.bg_color);
     if (style.flags.faint) {
@@ -169,16 +182,6 @@ pub fn buildFacePlist(
     if (style.flags.inverse) {
         try face_props.append(s.@":inverse-video");
         try face_props.append(env.t());
-    }
-
-    if (style.flags.bold) {
-        try face_props.append(s.@":weight");
-        try face_props.append(s.bold);
-    }
-
-    if (style.flags.italic) {
-        try face_props.append(s.@":slant");
-        try face_props.append(s.italic);
     }
 
     if (style.flags.underline != .none) {

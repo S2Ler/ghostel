@@ -264,7 +264,7 @@ pub fn create(alloc: Allocator) !*Self {
     errdefer alloc.destroy(self);
     self.* = .{
         .alloc = alloc,
-        .stream = .initAlloc(alloc, .{ .alloc = alloc }),
+        .stream = .init(.{ .allocator = alloc, .handler = .{ .alloc = alloc } }),
     };
     return self;
 }

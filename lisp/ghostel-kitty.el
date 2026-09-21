@@ -72,25 +72,6 @@ inspected when image rendering misbehaves.")
     (when (memq 'shared-mem mediums) (setq bits (logior bits 4)))
     bits))
 
-(define-error 'ghostel-kitty-unsupported-source-rect
-              "Kitty graphics atlas-style source rect not supported"
-              'error)
-
-(defun ghostel--kitty-check-source-rect (src-x src-y src-w src-h pixel-w pixel-h)
-  "Signal `ghostel-kitty-unsupported-source-rect' for non-default crops.
-SRC-X / SRC-Y / SRC-W / SRC-H are the requested source-rect crop in image
-pixels; PIXEL-W / PIXEL-H are the rendered pixel dimensions.  All zeros
-means the whole image (the common case from timg/yazi).
-
-Atlas-style placements (sub-region of the source image) aren't supported
-because Emacs's image system can't crop pre-scale; refuse explicitly so
-mis-rendering is visible as an error instead of silent."
-  (when (or (> src-x 0) (> src-y 0)
-            (and (> src-w 0) (/= src-w pixel-w))
-            (and (> src-h 0) (/= src-h pixel-h)))
-    (signal 'ghostel-kitty-unsupported-source-rect
-            (list src-x src-y src-w src-h pixel-w pixel-h))))
-
 (defun ghostel--kitty-apply-row-slice (row cw ch img
                                            vp-col-clamped visible-cols
                                            slice-x slice-w)
@@ -138,25 +119,16 @@ the buffer line is long enough to hold the placement's column range."
                            (list 'line-height ch 'ghostel-kitty t)))
     (setq ghostel--kitty-active t)))
 
-(defun ghostel--kitty-display-image (data is-png abs-row vp-col grid-cols grid-rows pixel-w pixel-h
-                                          src-x src-y src-w src-h)
+(defun ghostel--kitty-display-image (data abs-row vp-col grid-cols grid-rows pixel-w pixel-h)
   "Display a kitty graphics image placement in the buffer.
 Called from the native module during redraw for each visible placement.
-DATA is a unibyte string (PNG or PPM).
-IS-PNG is non-nil for PNG, nil for PPM.
-ABS-ROW is the absolute buffer row (0-indexed from `point-min'),
-already accounting for materialized scrollback (the C side adds
-`scrollback_in_buffer' to libghostty's viewport-relative row before
-passing it here).  Without that pre-shift, an image at viewport row 0
-would render at the top of the scrollback, jumping into the past as
-soon as anything scrolled.  May be negative when the image's top is
-above the buffer's first line (rare — only when libghostty's scrollback
-got trimmed below the placement's anchor).
+DATA is a unibyte PPM string of the placement's source rect.
+ABS-ROW is the buffer row (0-indexed from `point-min') of the image's
+top: libghostty's screen row, which the renderer keeps equal to the
+buffer line.  May be negative when the top is above the first line.
 VP-COL is the column (may be negative — image partially off the left).
 GRID-COLS and GRID-ROWS are the cell dimensions.
 PIXEL-W and PIXEL-H are the rendered pixel dimensions.
-SRC-X / SRC-Y / SRC-W / SRC-H are the source-rect crop in image pixels;
-all zero means the whole image (the common case from timg/yazi).
 
 The image is sized to fill its grid cells and then sliced per row, with
 each slice applied on its own buffer line.  Slicing — rather than a
@@ -173,131 +145,97 @@ after a placement (a subsequent layout change would fix it, but the
 user shouldn't have to trigger one)."
   (when (display-graphic-p)
     (condition-case err
-        (progn
-          (ghostel--kitty-check-source-rect src-x src-y src-w src-h pixel-w pixel-h)
-          (let* ((cw (default-font-width))
-                 (ch (default-font-height))
-                 (g-cols (if (> grid-cols 0) grid-cols
-                           (max 1 (/ (+ pixel-w cw -1) cw))))
-                 (g-rows (if (> grid-rows 0) grid-rows
-                           (max 1 (/ (+ pixel-h ch -1) ch))))
-                 (img (create-image data (if is-png 'png 'pbm) t
-                                    :width (* g-cols cw)
-                                    :height (* g-rows ch)
-                                    :scale 1
-                                    :ascent 'center))
-                 (skip (max 0 abs-row))
-                 (start-row (max 0 (- abs-row)))
-                 ;; Clamp negative vp-col (image partially scrolled off
-                 ;; the left edge): start the buffer range at column 0
-                 ;; and skip the off-screen pixel columns inside the
-                 ;; slice.
-                 (vp-col-clamped (max 0 vp-col))
-                 (start-col (max 0 (- vp-col)))
-                 (slice-x (* start-col cw))
-                 (visible-cols (max 0 (- g-cols start-col)))
-                 (slice-w (* visible-cols cw)))
-            (when (> visible-cols 0)
-              (save-excursion
-                (goto-char (point-min))
-                (when (zerop (forward-line skip))
-                  ;; Skip rows already in materialized scrollback — they
-                  ;; got their overlays in an earlier emit and
-                  ;; `kitty-clear' preserves scrollback overlays.
-                  ;; Re-applying here would stack a second overlay on
-                  ;; every scrolled-in row.
-                  (let ((row start-row)
-                        (more t)
-                        (vp-start (or (ghostel--viewport-start) (point-min))))
-                    (while (and more (< row g-rows))
-                      (when (>= (point) vp-start)
-                        (ghostel--kitty-apply-row-slice
-                         row cw ch img
-                         vp-col-clamped visible-cols slice-x slice-w))
-                      (setq row (1+ row))
-                      (unless (zerop (forward-line 1))
-                        (setq more nil)))))))))
+        (let* ((cw (default-font-width))
+               (ch (default-font-height))
+               (g-cols (if (> grid-cols 0) grid-cols
+                         (max 1 (/ (+ pixel-w cw -1) cw))))
+               (g-rows (if (> grid-rows 0) grid-rows
+                         (max 1 (/ (+ pixel-h ch -1) ch))))
+               (img (create-image data 'pbm t
+                                  :width (* g-cols cw)
+                                  :height (* g-rows ch)
+                                  :scale 1
+                                  :ascent 'center))
+               (skip (max 0 abs-row))
+               (start-row (max 0 (- abs-row)))
+               ;; Clamp negative vp-col (image partially scrolled off
+               ;; the left edge): start the buffer range at column 0
+               ;; and skip the off-screen pixel columns inside the
+               ;; slice.
+               (vp-col-clamped (max 0 vp-col))
+               (start-col (max 0 (- vp-col)))
+               (slice-x (* start-col cw))
+               (visible-cols (max 0 (- g-cols start-col)))
+               (slice-w (* visible-cols cw)))
+          (when (> visible-cols 0)
+            (save-excursion
+              (goto-char (point-min))
+              (when (zerop (forward-line skip))
+                ;; Skip rows already in materialized scrollback — they
+                ;; got their overlays in an earlier emit and
+                ;; `kitty-clear' preserves scrollback overlays.
+                ;; Re-applying here would stack a second overlay on
+                ;; every scrolled-in row.
+                (let ((row start-row)
+                      (more t)
+                      (vp-start (or (ghostel--viewport-start) (point-min))))
+                  (while (and more (< row g-rows))
+                    (when (>= (point) vp-start)
+                      (ghostel--kitty-apply-row-slice
+                       row cw ch img
+                       vp-col-clamped visible-cols slice-x slice-w))
+                    (setq row (1+ row))
+                    (unless (zerop (forward-line 1))
+                      (setq more nil))))))))
       (error
        (setq ghostel--kitty-last-error err)
        (message "ghostel: kitty image error: %S" err)))))
 
-(defun ghostel--kitty-display-virtual (data is-png)
-  "Display a virtual kitty graphics placement (unicode placeholders).
-Searches the buffer for U+10EEEE placeholder characters and overlays
-per-row image slices on the placeholder regions of each line.
-DATA is a unibyte string (PNG or PPM).  IS-PNG is non-nil for PNG."
+(defun ghostel--kitty-display-virtual (data row-up nth img-row img-col
+                                            width grid-cols grid-rows)
+  "Display one placeholder run of a virtual kitty placement.
+DATA is a unibyte PPM string.  ROW-UP is the run's row counted up from
+the last screen row (0 = last row); its first cell is the NTH (0-based)
+U+10EEEE placeholder on that row.  IMG-ROW and IMG-COL are the image
+cell it starts at, WIDTH its length in cells, GRID-COLS and GRID-ROWS
+the whole image.  Cells are located by counting placeholders, since
+their combining diacritics make buffer width differ from cell width."
   (when (display-graphic-p)
     (condition-case err
-        (let ((placeholder (string #x10EEEE))
-              (cw (default-font-width))
-              (ch (default-font-height))
-              grid-cols grid-rows img)
+        (let* ((cw (default-font-width))
+               (ch (default-font-height))
+               (img (create-image data 'pbm t
+                                  :width (* grid-cols cw)
+                                  :height (* grid-rows ch)
+                                  :scale 1
+                                  :ascent 'center)))
           (save-excursion
-            ;; First pass: measure the grid by walking the buffer line by
-            ;; line and counting placeholders.  Tracks the *maximum* count
-            ;; across rows so a short first row doesn't undersize the
-            ;; image.  Avoids `line-number-at-pos' in the search loop —
-            ;; that's O(buffer size) per call and was the dominant cost
-            ;; for large yazi previews.
-            (goto-char (point-min))
-            (let ((max-line-cols 0)
-                  (total-rows 0))
-              (while (not (eobp))
-                (let ((eol (line-end-position))
-                      (this-row 0))
-                  (save-excursion
-                    (while (search-forward placeholder eol t)
-                      (setq this-row (1+ this-row))))
-                  (when (> this-row 0)
-                    (setq total-rows (1+ total-rows))
-                    (when (> this-row max-line-cols)
-                      (setq max-line-cols this-row))))
-                (forward-line 1))
-              (setq grid-cols (max 1 max-line-cols))
-              (setq grid-rows (max 1 total-rows)))
-            ;; Create the image sized to the full grid.  `:ascent center'
-            ;; aligns each slice around the line's vertical center so it
-            ;; tiles flush with adjacent slices regardless of the line's
-            ;; baseline (the default `:ascent 50' splits the slice across
-            ;; the baseline, leaving visible offsets between rows).
-            (setq img (create-image data (if is-png 'png 'pbm) t
-                                    :width (* grid-cols cw)
-                                    :height (* grid-rows ch)
-                                    :scale 1
-                                    :ascent 'center))
-            ;; Second pass: apply per-row slices on placeholder regions.
-            ;; Walks line by line — `line-end-position' is O(1) with no
-            ;; full-buffer scan per placeholder.
-            (goto-char (point-min))
-            (let ((row 0))
-              (while (not (eobp))
-                (let* ((eol (line-end-position))
-                       (line-start (save-excursion
-                                     (search-forward placeholder eol t))))
-                  (when line-start
-                    (let ((line-end eol))
-                      (setq line-start (1- line-start))
-                      (when (> line-end line-start)
-                        (add-text-properties
-                         line-start line-end
-                         (list 'display (list (list 'slice 0 (* row ch)
-                                                    (* grid-cols cw) ch)
-                                              img)
-                               'ghostel-kitty t))
-                        ;; Clamp the placeholder line to `ch' so the slice
-                        ;; tiles flush and the file-list column on the same
-                        ;; line doesn't grow taller than non-image lines.
-                        ;; The U+10EEEE fallback font and any Nerd Font
-                        ;; icons would otherwise pull line height above the
-                        ;; buffer's default font height, leaving gaps below
-                        ;; the slice and above the next line's content.
-                        (when (< line-end (point-max))
-                          (add-text-properties line-end (1+ line-end)
-                                               (list 'line-height ch
-                                                     'ghostel-kitty t)))
-                        (setq ghostel--kitty-active t)))
-                    (setq row (1+ row))))
-                (forward-line 1)))))
+            ;; The last screen row is the line before the final newline.
+            (goto-char (point-max))
+            (let ((ph (string #x10EEEE)))
+              (when (and (zerop (forward-line (- (1+ row-up))))
+                         (search-forward ph (line-end-position) t (1+ nth)))
+                (let ((start (1- (point)))
+                      (eol (line-end-position)))
+                  (when (or (= width 1)
+                            (search-forward ph eol t (1- width)))
+                    (while (and (< (point) eol)
+                                (eq (get-char-code-property
+                                     (char-after) 'general-category)
+                                    'Mn))
+                      (forward-char))
+                    (add-text-properties
+                     start (point)
+                     (list 'display (list (list 'slice (* img-col cw) (* img-row ch)
+                                                (* width cw) ch)
+                                          img)
+                           'ghostel-kitty t))
+                    ;; Clamp the line to `ch' so the slice tiles flush; the
+                    ;; placeholder fallback font would otherwise grow the line.
+                    (add-text-properties eol (1+ eol)
+                                         (list 'line-height ch
+                                               'ghostel-kitty t))
+                    (setq ghostel--kitty-active t)))))))
       (error
        (setq ghostel--kitty-last-error err)
        (message "ghostel: kitty virtual image error: %S" err)))))

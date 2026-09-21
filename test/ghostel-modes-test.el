@@ -3,11 +3,41 @@
 ;;; Commentary:
 
 ;; Input mode state + char/emacs/copy mode transitions, fake cursor,
-;; copy-mode cursor + hl-line.
+;; copy-mode cursor + hl-line, menu-bar menu.
 
 ;;; Code:
 
 (require 'ghostel-test-helpers)
+
+(ert-deftest ghostel-test-menu-items-are-commands ()
+  "Every leaf of `ghostel-menu' names a live command."
+  (cl-labels ((walk (map)
+                (map-keymap (lambda (_key item)
+                              (let ((def (nth 2 item)))
+                                (cond ((keymapp def) (walk def))
+                                      (def (should (commandp def))))))
+                            map)))
+    (walk (lookup-key ghostel-mode-map [menu-bar ghostel]))))
+
+(ert-deftest ghostel-test-menu-bound-once-per-input-mode ()
+  "Exactly one active keymap carries the menu in every input mode.
+Char mode activates its keymap twice (local map and emulation alist);
+a menu on both would render every item twice."
+  (let ((buf (generate-new-buffer " *ghostel-test-menu*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (ghostel-mode)
+          (let ((ghostel--term 'fake))
+            (cl-letf (((symbol-function 'ghostel--invalidate) #'ignore)
+                      ((symbol-function 'ghostel--anchor-window) #'ignore))
+              (dolist (enter '(ghostel-semi-char-mode ghostel-char-mode
+                               ghostel-copy-mode ghostel-emacs-mode))
+                (funcall enter)
+                (should (= 1 (seq-count
+                              (lambda (map)
+                                (keymapp (lookup-key map [menu-bar ghostel])))
+                              (current-active-maps))))))))
+      (kill-buffer buf))))
 
 (ert-deftest ghostel-test-mode-remaps-default-face ()
   "Ghostel buffers inherit their default appearance from `ghostel-default'."
@@ -26,6 +56,16 @@ outranks and silently masks other `default' remappings in the buffer,
 such as `buffer-face-mode'."
   (should (seq-every-p (lambda (attr) (eq (cdr attr) 'unspecified))
                        (face-all-attributes 'ghostel-default))))
+
+(ert-deftest ghostel-test-attribute-faces-exist ()
+  "The faces the renderer names in `:inherit' are defined.
+Emacs drops an `:inherit' naming an undefined face without complaint, so
+a rename on either side of the module boundary would silently stop bold
+and italic from rendering."
+  (should (facep 'ghostel-bold))
+  (should (facep 'ghostel-italic))
+  (should (eq 'ansi-color-bold (face-attribute 'ghostel-bold :inherit)))
+  (should (eq 'ansi-color-italic (face-attribute 'ghostel-italic :inherit))))
 
 (ert-deftest ghostel-test-buffer-face-mode-refits-terminal ()
   "`buffer-face-mode' resizes the terminal to the rescaled window.
@@ -236,6 +276,56 @@ unlike semi-char mode where it tracks the terminal cursor."
                 ((symbol-function 'message) #'ignore))
         (ghostel-readonly-exit)
         (should (equal (list (selected-window) t) adjust-args))))))
+
+(ert-deftest ghostel-test-readonly-exit-deactivates-mark-before-moving-point ()
+  "Exiting a read-only mode clears the region before snapping point.
+Deactivating after the snap would publish the grown span to PRIMARY."
+  (with-temp-buffer
+    (ghostel-mode)
+    (ghostel-test--insert-rendered "alpha\nbeta\n")
+    (let ((ghostel--term 'fake)
+          (ghostel--input-mode 'copy)
+          (ghostel--pre-readonly-mode 'semi-char)
+          (transient-mark-mode t)
+          (end (+ (point-min) 5))
+          (deactivated-at nil))
+      (set-mark (point-min))
+      (goto-char end)
+      (add-hook 'deactivate-mark-hook
+                (lambda () (setq deactivated-at (point))) nil t)
+      (cl-letf (((symbol-function 'ghostel--adjust-size) #'ignore)
+                ((symbol-function 'ghostel--anchor-window) #'ignore)
+                ((symbol-function 'ghostel-force-redraw) #'ignore)
+                ((symbol-function 'message) #'ignore))
+        (ghostel-readonly-exit))
+      (should (equal deactivated-at end))
+      (should (= (point) (point-max))))))
+
+(ert-deftest ghostel-test-live-mode-switch-deactivates-mark ()
+  "Switching to a live input mode clears the region before snapping point.
+The snap to `point-max' would otherwise stretch a selection to the prompt."
+  (dolist (spec (list (cons #'ghostel-char-mode 'semi-char)
+                      (cons #'ghostel-semi-char-mode 'line)))
+    (with-temp-buffer
+      (ghostel-mode)
+      (ghostel-test--insert-rendered "alpha\nbeta\n")
+      (let ((ghostel--term 'fake)
+            (ghostel--input-mode (cdr spec))
+            (ghostel-mark-activation-input-mode nil)
+            (transient-mark-mode t)   ; nil in batch
+            (end (+ (point-min) 5))
+            (deactivated-at nil))
+        (set-mark (point-min))
+        (goto-char end)
+        (add-hook 'deactivate-mark-hook
+                  (lambda () (setq deactivated-at (point))) nil t)
+        (cl-letf (((symbol-function 'ghostel--anchor-window) #'ignore)
+                  ((symbol-function 'ghostel--invalidate) #'ignore)
+                  ((symbol-function 'ghostel--line-mode-teardown) #'ignore)
+                  ((symbol-function 'message) #'ignore))
+          (funcall (car spec)))
+        (should (equal deactivated-at end))
+        (should (= (point) (point-max)))))))
 
 (ert-deftest ghostel-test-copy-mode-cursor ()
   "Test that copy-mode restores cursor visibility when terminal hid it."
@@ -1594,6 +1684,78 @@ check keeps semi-char mode."
       (ghostel--anchor-window window)
       (ghostel-maybe-leave-input)
       (should (eq ghostel--input-mode 'semi-char)))))
+
+(ert-deftest ghostel-test-repainted-region-deactivates-overlapping-mark ()
+  "Output rewriting part of the region clears it with `select-active-regions' off."
+  (with-temp-buffer
+    (ghostel-mode)
+    (ghostel-test--insert-rendered "alpha\nbeta\ngamma\n")
+    (let ((transient-mark-mode t)         ; nil in batch
+          (ghostel-mark-activation-input-mode nil)
+          (select-active-regions t)
+          (sar-during-deactivate 'unset))
+      (set-mark (point-min))
+      (goto-char (+ (point-min) 5))
+      (add-hook 'deactivate-mark-hook
+                (lambda () (setq sar-during-deactivate select-active-regions))
+                nil t)
+      (setq ghostel--repainted-region (cons (+ (point-min) 3) (point-max)))
+      (ghostel--deactivate-repainted-region)
+      (should-not (region-active-p))
+      (should-not sar-during-deactivate))))
+
+(ert-deftest ghostel-test-repainted-region-boundaries ()
+  "The overlap test spares an empty region and a repaint outside it.
+Shell output appends below the selected rows, the common spared case."
+  ;; (MARK POINT REPAINT-BEG REPAINT-END STILL-ACTIVE)
+  (dolist (case '((4 4 2 10 t)           ; empty region inside the repaint
+                  (2 6 6 10 t)           ; repaint starts at the region end
+                  (6 10 2 6 t)           ; repaint ends at the region start
+                  (2 6 8 10 t)           ; repaint below the region
+                  (2 6 2 6 nil)          ; exact cover
+                  (2 10 4 6 nil)))       ; repaint strictly inside
+    (pcase-let ((`(,mark ,point ,rbeg ,rend ,active) case))
+      (with-temp-buffer
+        (ghostel-mode)
+        (ghostel-test--insert-rendered "alpha\nbeta\ngamma\n")
+        (let ((transient-mark-mode t)
+              (ghostel-mark-activation-input-mode nil))
+          (set-mark mark)
+          (goto-char point)
+          (setq ghostel--repainted-region (cons rbeg rend))
+          (ghostel--deactivate-repainted-region)
+          (should (eq active (region-active-p))))))))
+
+(ert-deftest ghostel-test-repainted-region-survives-signalling-hook ()
+  "A signalling `deactivate-mark-hook' does not escape into the redraw.
+ERT binds `debug-on-error' before Emacs 30, which stops
+`condition-case-unless-debug' from catching anything."
+  (with-temp-buffer
+    (ghostel-mode)
+    (ghostel-test--insert-rendered "alpha\nbeta\ngamma\n")
+    (let ((transient-mark-mode t)
+          (ghostel-mark-activation-input-mode nil)
+          (debug-on-error nil)
+          (inhibit-message t))
+      (set-mark (point-min))
+      (goto-char (+ (point-min) 5))
+      (add-hook 'deactivate-mark-hook (lambda () (error "Boom")) nil t)
+      (setq ghostel--repainted-region (cons (point-min) (point-max)))
+      (ghostel--deactivate-repainted-region)
+      (should-not (region-active-p)))))
+
+(ert-deftest ghostel-test-repainted-region-spares-line-mode ()
+  "Line mode keeps its selection: every redraw repaints the whole buffer."
+  (with-temp-buffer
+    (ghostel-mode)
+    (ghostel-test--insert-rendered "alpha\nbeta\ngamma\n")
+    (let ((transient-mark-mode t)
+          (ghostel--input-mode 'line))
+      (set-mark (point-min))
+      (goto-char (+ (point-min) 5))
+      (setq ghostel--repainted-region (cons (point-min) (point-max)))
+      (ghostel--deactivate-repainted-region)
+      (should (region-active-p)))))
 
 (ert-deftest ghostel-test-mode-commands-reject-non-ghostel-buffer ()
   "Input-mode commands signal `user-error' outside ghostel buffers.

@@ -6,11 +6,11 @@
 ;;; Commentary:
 
 ;; Appearance definitions for ghostel's terminal rendering: the 16 ANSI
-;; color faces (inheriting Emacs's `ansi-color-*' faces), the hint-cursor
-;; faces drawn in copy/Emacs modes, the `ghostel-default' base face that
-;; controls the buffer's inherited terminal appearance, and the
-;; `ghostel-color-palette' vector that maps the 16 palette slots to those
-;; faces.
+;; color faces (inheriting Emacs's `ansi-color-*' faces), the bold and
+;; italic attribute faces, the hint-cursor faces drawn in copy/Emacs
+;; modes, the `ghostel-default' base face that controls the buffer's
+;; inherited terminal appearance, and the `ghostel-color-palette' vector
+;; that maps the 16 palette slots to those faces.
 
 ;;; Code:
 
@@ -97,6 +97,19 @@
 (defface ghostel-color-bright-white
   '((t :inherit ansi-color-bright-white))
   "Face used to render bright white color code."
+  :group 'ghostel)
+
+
+;;; Text attribute faces
+
+(defface ghostel-bold
+  '((t :inherit ansi-color-bold))
+  "Face used to render bold text."
+  :group 'ghostel)
+
+(defface ghostel-italic
+  '((t :inherit ansi-color-italic))
+  "Face used to render italic text."
   :group 'ghostel)
 
 

@@ -25,6 +25,75 @@ pub fn emitPlacements(env: emacs.Env, term: *GhostelTerm) !void {
             entry.value_ptr,
         ) catch continue;
     }
+    emitVirtualRuns(env, term, storage);
+}
+
+/// Emit one Elisp call per unicode placeholder run from the row this
+/// redraw's render started at down to the last active row, covering rows
+/// that left the active area since the previous redraw.
+fn emitVirtualRuns(env: emacs.Env, term: *GhostelTerm, storage: *const gt.kitty.graphics.ImageStorage) void {
+    if (storage.placements.count() == 0) return;
+    const pages = &term.terminal.screens.active.pages;
+    const top = term.renderer.rendered_from orelse return;
+    const bottom = pages.getBottomRight(.active) orelse return;
+    const bottom_y = (pages.pointFromPin(.screen, bottom) orelse return).screen.y;
+    var it = gt.kitty.graphics.unicode.placementIterator(top, bottom);
+    // Image data handed to Emacs, per image id, for this redraw only.
+    var images: std.AutoHashMapUnmanaged(u32, emacs.Value) = .empty;
+    defer images.deinit(term.alloc);
+    // Per-run errors skip that run only.
+    while (it.next()) |run| {
+        emitVirtualRun(env, term, storage, &run, bottom_y, &images) catch continue;
+    }
+}
+
+fn emitVirtualRun(
+    env: emacs.Env,
+    term: *GhostelTerm,
+    storage: *const gt.kitty.graphics.ImageStorage,
+    run: *const gt.kitty.graphics.unicode.Placement,
+    bottom_y: u32,
+    images: *std.AutoHashMapUnmanaged(u32, emacs.Value),
+) !void {
+    const image = storage.images.getPtr(run.image_id) orelse return error.ImageNotFound;
+    const target = storage.placeholderTarget(run.image_id, run.placement_id) orelse return error.PlacementNotFound;
+    if (target.placement.location != .virtual) return error.PlacementNotFound;
+
+    const t = &term.terminal;
+    const grid_cols = if (target.placement.columns > 0) target.placement.columns else try cellsFor(image.width, t.width_px, t.cols);
+    const grid_rows = if (target.placement.rows > 0) target.placement.rows else try cellsFor(image.height, t.height_px, t.rows);
+
+    // Elisp locates the run by counting placeholders on its row.
+    var ordinal: u32 = 0;
+    for (run.pin.cells(.left)[0..run.pin.x]) |*cell| {
+        if (cell.codepoint() == gt.kitty.graphics.unicode.placeholder) ordinal += 1;
+    }
+    const pin_screen = t.screens.active.pages.pointFromPin(.screen, run.pin) orelse return error.NotVisible;
+
+    const val = images.get(run.image_id) orelse val: {
+        const data = try getImageData(term.alloc, image, ppm.Rect.full(image.width, image.height));
+        defer term.alloc.free(data);
+        const v = env.makeUnibyteString(data) orelse return error.MakeString;
+        try images.put(term.alloc, run.image_id, v);
+        break :val v;
+    };
+    _ = env.f("ghostel--kitty-display-virtual", .{
+        val,
+        bottom_y - pin_screen.screen.y,
+        ordinal,
+        run.row,
+        run.col,
+        run.width,
+        grid_cols,
+        grid_rows,
+    });
+}
+
+/// Cells covering `px` pixels at the terminal's cell pitch.
+fn cellsFor(px: u32, total_px: u32, count: usize) !u32 {
+    const cell: u32 = @intCast(total_px / count);
+    if (cell == 0) return error.NoCellSize;
+    return (px + cell - 1) / cell;
 }
 
 fn emitOnePlacement(
@@ -36,111 +105,90 @@ fn emitOnePlacement(
 ) !void {
     const image = storage.images.getPtr(key.image_id) orelse return error.ImageNotFound;
     switch (placement.location) {
-        .virtual => {
-            const emacs_data = try getImageData(term.alloc, image);
-            defer if (emacs_data.allocated) term.alloc.free(emacs_data.data);
-
-            // Virtual placements (yazi-style U+10EEEE unicode placeholders).
-            // The API doesn't provide viewport positions — Elisp searches
-            // the buffer for placeholder characters.
-            const img_val = env.makeUnibyteString(emacs_data.data) orelse return error.MakeString;
-            var args = [_]emacs.Value{
-                img_val,
-                if (emacs_data.is_png) env.t() else env.nil(),
-            };
-            _ = env.funcall(emacs.sym.@"ghostel--kitty-display-virtual", &args);
-        },
-        .pin => |pin| {
-            // Most of this is taken from libghostty C API wrapper
-            const pixel_size = placement.pixelSize(image.*, &term.terminal);
-            const grid_size = placement.gridSize(image.*, &term.terminal);
-            const pages = &term.terminal.screens.active.pages;
-            const pin_screen = pages.pointFromPin(.screen, pin.*) orelse return error.NotVisible;
-            const active_tl = pages.getTopLeft(.active);
-            const active_screen = pages.pointFromPin(.screen, active_tl) orelse return error.NotVisible;
-            const active_row: i32 = @as(i32, @intCast(pin_screen.screen.y)) -
-                @as(i32, @intCast(active_screen.screen.y));
-            const active_col: i32 = @intCast(pin_screen.screen.x);
-            const rows_i32: i32 = @intCast(grid_size.rows);
-            const term_rows: i32 = @intCast(term.terminal.rows);
-            const visible = active_row + rows_i32 > 0 and active_row < term_rows;
-
-            // Non-virtual: get render info for viewport position.
-            if (!visible) return error.NotVisible;
-
-            const emacs_data = try getImageData(term.alloc, image);
-            defer if (emacs_data.allocated) term.alloc.free(emacs_data.data);
-
-            const img_val = env.makeUnibyteString(emacs_data.data) orelse return error.MakeString;
-            _ = env.f("ghostel--kitty-display-image", .{
-                img_val,
-                if (emacs_data.is_png) env.t() else env.nil(),
-                pin_screen.screen.y,
-                active_col,
-                grid_size.cols,
-                grid_size.rows,
-                pixel_size.width,
-                pixel_size.height,
-                @min(placement.source_x, image.width),
-                @min(placement.source_y, image.height),
-                placement.source_width,
-                placement.source_height,
-            });
+        // Drawn from its placeholder runs by emitVirtualRuns.
+        .virtual => return,
+        .pin => |pin| try emitPinned(env, term, image, placement, pin, 0, 0),
+        .relative => |rel| {
+            // An unresolvable chain is never drawn.
+            const chain = storage.resolveChain(rel) orelse return error.NotVisible;
+            switch (chain.root.location) {
+                .pin => |root_pin| try emitPinned(
+                    env,
+                    term,
+                    image,
+                    placement,
+                    root_pin,
+                    chain.horizontal_offset,
+                    chain.vertical_offset,
+                ),
+                // Not implemented: kitty anchors these at the top-left
+                // placeholder cell of the parent's runs.
+                .virtual => return error.NotVisible,
+                .relative => unreachable,
+            }
         },
     }
 }
 
-/// Image bytes ready to hand to Emacs.
-///
-/// Lifetime: when `allocated` is false, `data` aliases libghostty-owned
-/// storage and is only valid until libghostty mutates the image table
-/// (e.g. an evicting transmit, a delete command, or storage trimming).
-/// Use it synchronously — copy via `makeUnibyteString` and drop the
-/// reference before yielding control back to libghostty.  When
-/// `allocated` is true, `data` is owned by the caller's allocator and the
-/// caller must free it.
-const ImageData = struct {
-    data: []const u8,
-    is_png: bool,
-    allocated: bool,
-};
+/// Emit a placement anchored at PIN, offset by H_OFF/V_OFF cells.
+fn emitPinned(
+    env: emacs.Env,
+    term: *GhostelTerm,
+    image: *const gt.kitty.graphics.Image,
+    placement: *const gt.kitty.graphics.ImageStorage.Placement,
+    pin: *const gt.PageList.Pin,
+    h_off: i32,
+    v_off: i32,
+) !void {
+    const pixel_size = placement.pixelSize(image.*, &term.terminal);
+    const grid_size = placement.gridSize(image.*, &term.terminal);
+    const pages = &term.terminal.screens.active.pages;
+    // A pruned anchor page leaves the pin parked at (0,0) until reaped.
+    if (pin.garbage) return error.NotVisible;
+    const pin_screen = pages.pointFromPin(.screen, pin.*) orelse return error.NotVisible;
+    const active_tl = pages.getTopLeft(.active);
+    const active_screen = pages.pointFromPin(.screen, active_tl) orelse return error.NotVisible;
+    // i64: protocol offsets and grid sizes are unbounded.  Elisp clips negatives.
+    const screen_row: i64 = @as(i64, @intCast(pin_screen.screen.y)) + v_off;
+    const active_row: i64 = screen_row - @as(i64, @intCast(active_screen.screen.y));
+    const active_col: i64 = @as(i64, @intCast(pin_screen.screen.x)) + h_off;
+    const visible = active_row + grid_size.rows > 0 and active_row < term.terminal.rows and
+        active_col + grid_size.cols > 0 and active_col < term.terminal.cols;
 
-fn getImageData(alloc: Allocator, image: *const gt.kitty.graphics.Image) !ImageData {
-    // libghostty decompresses images at transmit time, so by the time
-    // we read out the data here it should always be in the .none state.
-    // Refuse explicitly so a future libghostty change that defers
-    // decompression doesn't silently hand us garbage bytes that Emacs
-    // would try to render as PNG/PPM.
+    if (!visible) return error.NotVisible;
+
+    // Emacs crops only post-scale, so crop before it sees the pixels.
+    const src = placement.sourceRect(image.*);
+    const data = try getImageData(term.alloc, image, .{ .x = src.x, .y = src.y, .width = src.width, .height = src.height });
+    defer term.alloc.free(data);
+
+    const img_val = env.makeUnibyteString(data) orelse return error.MakeString;
+    _ = env.f("ghostel--kitty-display-image", .{
+        img_val,
+        screen_row,
+        active_col,
+        grid_size.cols,
+        grid_size.rows,
+        pixel_size.width,
+        pixel_size.height,
+    });
+}
+
+/// PPM bytes of the RECT sub-rectangle of IMAGE, owned by `alloc`.
+fn getImageData(alloc: Allocator, image: *const gt.kitty.graphics.Image, rect: ppm.Rect) ![]const u8 {
+    // Decompression happens at transmit time; anything else is a libghostty change.
     if (image.compression != .none) return error.UnsupportedCompression;
-
-    if (image.data.len == 0 or image.width == 0 or image.height == 0) return error.EmptyImage;
+    // Chunked transmissions still in flight have no complete bytes yet.
+    const data = image.renderData().bytes() orelse return error.EmptyImage;
+    if (data.len == 0 or image.width == 0 or image.height == 0) return error.EmptyImage;
     // Alpha is dropped, not composited (see ppm.createPpm doc comment).
-    // PNG payloads in normal operation never reach the PNG branch here:
-    // libghostty's PNG decode hook (sys.zig) decodes them to RGBA at
-    // transmit time, so format arrives as RGBA and we go through the
-    // PPM path with channels=4.  The PNG branch stays for the case
-    // where the decode hook is uninstalled or rejected the payload.
-    return switch (image.format) {
-        .png => .{ .data = image.data, .is_png = true, .allocated = false },
-        .rgba => .{
-            .data = ppm.createPpm(alloc, image.data, image.width, image.height, 4) orelse return error.PpmConvert,
-            .is_png = false,
-            .allocated = true,
-        },
-        .rgb => .{
-            .data = ppm.createPpm(alloc, image.data, image.width, image.height, 3) orelse return error.PpmConvert,
-            .is_png = false,
-            .allocated = true,
-        },
-        .gray_alpha => .{
-            .data = ppm.createPpm(alloc, image.data, image.width, image.height, 2) orelse return error.PpmConvert,
-            .is_png = false,
-            .allocated = true,
-        },
-        .gray => .{
-            .data = ppm.createPpm(alloc, image.data, image.width, image.height, 1) orelse return error.PpmConvert,
-            .is_png = false,
-            .allocated = true,
-        },
+    // PNG is decoded to RGBA at transmit time by the hook in module.zig.
+    const channels: u32 = switch (image.format) {
+        .png => unreachable,
+        .rgba => 4,
+        .rgb => 3,
+        .gray_alpha => 2,
+        .gray => 1,
     };
+    return ppm.createPpm(alloc, data, image.width, image.height, channels, rect) orelse error.PpmConvert;
 }

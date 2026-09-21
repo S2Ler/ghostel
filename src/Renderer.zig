@@ -60,6 +60,8 @@ saved_markers: SavedBufferMarkers = .{},
 /// Buffer range rewritten by the redraw in progress, or null when it has
 /// painted nothing yet. Published so elisp can scan exactly what changed.
 repainted: ?BufferRegion = null,
+/// Pin the last render started from; every row from here down was walked.
+rendered_from: ?gt.Pin = null,
 
 const BufferRegion = struct {
     min: usize,
@@ -173,13 +175,12 @@ pub fn redraw(self: *Self, env: emacs.Env, force_full: bool, force_sync: bool) !
     self.gotoActiveStart(env);
     try self.commitResize(env);
 
-    try self.render(
-        env,
-        if (screen.no_scrollback)
-            screen.pages.getTopLeft(.active)
-        else
-            self.active_pin.*,
-    );
+    const from = if (screen.no_scrollback)
+        screen.pages.getTopLeft(.active)
+    else
+        self.active_pin.*;
+    self.rendered_from = from;
+    try self.render(env, from);
 
     try self.renderCursor(env);
 
@@ -1012,8 +1013,9 @@ fn renderCursor(self: *Self, env: emacs.Env) !void {
 fn commitResize(self: *Self, env: emacs.Env) !void {
     if (self.pending_resize) |rz| {
         const cols_changed = rz.cols != self.term.cols;
-        // Pin our saved positions during resize
-        self.saved_markers.pin(self.term.screens.active, env);
+        // `bufferPosToPin` reads row numbers from the buffer;
+        // an erased one (`rows_in_buffer` 0) maps every position to row 0.
+        if (self.rows_in_buffer > 0) self.saved_markers.pin(self.term.screens.active, env);
 
         try self.term.resize(self.alloc, .{
             .cols = rz.cols,

@@ -634,6 +634,20 @@ rows in the viewport — with or without the trailing newline."
         (should (equal "hello" sent-text))
         (should (> (window-start) (point-min))))))
 
+(ert-deftest ghostel-test-anchor-window-keeps-unterminated-last-row-visible ()
+  "Anchoring fits the last row when `point-max' has no trailing newline.
+Line mode trims the renderer's blank tail, leaving `point-max' at the end
+of the prompt row rather than at a line start."
+  :tags '(native)
+  (ghostel-test-scroll--with-buffer (buf term 10 40 200)
+    (ghostel-test-scroll--write-lines term "scroll" 60)
+    (ghostel--redraw term t)
+    (goto-char (ghostel-test-scroll--bottom-position))
+    (delete-region (line-end-position) (point-max))
+    (ghostel--anchor-window nil t)
+    (should (= (floor (window-screen-lines))
+               (count-lines (window-start) (point-max))))))
+
 (ert-deftest ghostel-test-anchor-window-inhibit-functions-veto ()
   "`ghostel-inhibit-anchor-functions' vetoes anchoring per window.
 A non-nil-returning hook (honoring FORCE) leaves both point and the viewport
@@ -781,6 +795,33 @@ self-check sees the stale point and declines."
         (ghostel--anchor-window win nil t)
         (should (ghostel-test-scroll--bottom-visible-p win))
         (should (= (window-point win) ghostel--cursor-char-pos))))))
+
+(ert-deftest ghostel-test-window-follows-p-region-vetoes-semi-char ()
+  "An active region stops a semi-char window from following output.
+A selection left in semi-char mode would otherwise grow to the prompt
+each time output or a resize snaps point to the live cursor."
+  :tags '(native)
+  (ghostel-test-scroll--with-buffer (buf term 10 40 200)
+    (ghostel-test-scroll--write-lines term "scroll" 80)
+    (ghostel--redraw term t)
+    (let ((win (selected-window))
+          (transient-mark-mode t)
+          ;; Mouse handlers bypass the mark-activation switch; mirror that.
+          (ghostel-mark-activation-input-mode nil)
+          (pos (ghostel-test-scroll--line-position 75)))
+      (ghostel-test-scroll--anchor-window win)
+      (should (ghostel--window-follows-p win))
+      (set-mark pos)
+      (set-window-point win (+ pos 3))
+      (should (region-active-p))
+      (should-not (ghostel--window-follows-p win))
+      (ghostel--anchor-window win)
+      (should (= (window-point win) (+ pos 3)))
+      (should (= (mark) pos))
+      (deactivate-mark)
+      (should (ghostel--window-follows-p win))
+      (ghostel--anchor-window win)
+      (should (= (window-point win) ghostel--cursor-char-pos)))))
 
 (ert-deftest ghostel-test-window-on-cursor-p-riding-positions ()
   "Point on the cursor or at `point-max' rides; between them does not.

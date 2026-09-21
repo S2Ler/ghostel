@@ -1,7 +1,7 @@
 # Ghostel
 
 This is the `perf/many-tuis` branch of [S2Ler/ghostel](https://github.com/S2Ler/ghostel),
-with upstream 0.53.0 and subsequent fixes. It preserves strict-paste receipts,
+with upstream 0.56.0 and subsequent fixes. It preserves strict-paste receipts,
 reduces window searches for hidden terminals, and protects minibuffer height
 during redraw. Parsing and title updates continue while a terminal is hidden.
 The public terminal-control API provides bounded snapshots and input receipts
@@ -124,6 +124,12 @@ Replace comint's built-in `ansi-color-process-output` with Ghostel's VT parser.
 ```emacs-lisp
 (use-package ghostel-comint
   :hook (after-init . ghostel-comint-global-mode))
+```
+
+Add a `ghostel:` Org link type.
+```emacs-lisp
+(use-package ghostel-org
+  :after org)
 ```
 
 If you use an Emacs Lisp input method (Korean Hangul, Japanese, Chinese, or any

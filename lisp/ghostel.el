@@ -4,7 +4,7 @@
 
 ;; Author: Daniel Kraus <daniel@kraus.my>
 ;; URL: https://github.com/dakra/ghostel
-;; Version: 0.53.0
+;; Version: 0.56.0
 ;; Keywords: terminals
 ;; Package-Requires: ((emacs "28.1") (compat "30.1.0.1"))
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -688,8 +688,9 @@ Set one of those to override this choice for that trigger only."
 - `emacs': enter `ghostel-emacs-mode'.  Terminal output keeps
   streaming; the buffer is read-only.  Pick this when you do not
   want the terminal to pause for a selection.
-- nil: stay in semi-char.  Best-effort - the selection could get
-  clobbered by the next redraw, and `M-w' is not bound here.
+- nil: stay in semi-char.  `M-w' is not bound here.
+
+With `emacs' and nil, output repainting the selected rows deactivates it.
 
 Has no effect when terminal mouse input consumes the event, or
 when the buffer is not in semi-char-mode when the gesture
@@ -900,7 +901,8 @@ resize is committed.")
 (defcustom ghostel-bold-color nil
   "Configure how bold text is colored.
 
-If nil (default), bold text uses the same color as normal text.
+If nil (default), bold text is left the color it would have without
+the bold attribute, and a foreground on `ghostel-bold' still applies.
 
 If `bright', bold text uses the bright version of the current
 foreground color (ANSI colors 0-7 map to 8-15).
@@ -1471,10 +1473,67 @@ Drives the `emulation-mode-map-alists' entry that makes
 `ghostel-char-mode-map' override minor-mode keymaps.")
 
 (defvar ghostel--char-mode-override-alist
-  `((ghostel--char-mode-override-active . ,ghostel-char-mode-map))
-  "Alist entry registered in `emulation-mode-map-alists' for char mode.")
+  `((ghostel--char-mode-override-active
+     . ,(make-composed-keymap nil ghostel-char-mode-map)))
+  "Alist entry registered in `emulation-mode-map-alists' for char mode.
+A child map, so `ghostel-menu' is not also active via the local map.")
 
 (add-to-list 'emulation-mode-map-alists 'ghostel--char-mode-override-alist)
+
+(easy-menu-define ghostel-menu
+  (list ghostel-mode-map (cdar ghostel--char-mode-override-alist))
+  "Menu for `ghostel-mode'."
+  '("Ghostel"
+    ("Input Mode"
+     ["Semi-char" ghostel-semi-char-mode
+      :style radio :selected (eq ghostel--input-mode 'semi-char)
+      :help "Send most keys to the terminal, keep Emacs prefixes"]
+     ["Char" ghostel-char-mode
+      :style radio :selected (eq ghostel--input-mode 'char)
+      :help "Send every key to the terminal"]
+     ["Line" ghostel-line-mode
+      :style radio :selected (eq ghostel--input-mode 'line)
+      :help "Edit a line in Emacs, send it on RET"]
+     ["Copy" ghostel-copy-mode
+      :style radio :selected (eq ghostel--input-mode 'copy)
+      :help "Read-only; move point and copy freely"]
+     ["Emacs" ghostel-emacs-mode
+      :style radio :selected (eq ghostel--input-mode 'emacs)
+      :help "Read-only with plain Emacs keybindings"])
+    ("Signals"
+     ["Interrupt (C-c)" ghostel-send-C-c]
+     ["Suspend (C-z)" ghostel-send-C-z]
+     ["Quit (C-\\)" ghostel-send-C-backslash]
+     ["End of File (C-d)" ghostel-send-C-d]
+     "--"
+     ["Send Next Key Literally" ghostel-send-next-key])
+    ("Navigate"
+     ["Next Prompt" ghostel-next-prompt]
+     ["Previous Prompt" ghostel-previous-prompt]
+     "--"
+     ["Next Link" ghostel-next-hyperlink]
+     ["Previous Link" ghostel-previous-hyperlink]
+     ["Open Link at Point" ghostel-open-link-at-point]
+     ["Find File at Point" ghostel-find-file-at-point])
+    "--"
+    ["Paste" ghostel-paste]
+    ["Copy All" ghostel-copy-all]
+    ["Clear Screen" ghostel-clear]
+    ["Clear Scrollback" ghostel-clear-scrollback]
+    "--"
+    ["Terminal" ghostel]
+    ["Project Terminal" ghostel-project]
+    ["Next Terminal" ghostel-next]
+    ["Previous Terminal" ghostel-previous]
+    ["List Terminals" ghostel-list-buffers]
+    "--"
+    ["Sync Theme" ghostel-sync-theme]
+    ["Force Redraw" ghostel-force-redraw]
+    ("Debug"
+     ["Debug Info" ghostel-debug-info
+      :help "Collect environment details for a bug report"]
+     ["Debug Keypress" ghostel-debug-keypress])
+    ["Customize" (customize-group 'ghostel)]))
 
 
 ;;; Key sending
@@ -2696,6 +2755,7 @@ Most keys are sent to the terminal; keys in
     (setq ghostel--mode-line-tag nil)
     (ghostel--mode-line-refresh)
     (when ghostel--term
+      (deactivate-mark)  ; A region left active would grow with point.
       ;; Snap the window to the live viewport so the user lands back at the
       ;; prompt after exiting copy/emacs/line.  FORCE so a deliberate switch
       ;; wins over any `ghostel-inhibit-anchor-functions' roaming veto.
@@ -2730,6 +2790,7 @@ Even keys listed in `ghostel-keymap-exceptions' (\\`C-c', \\`C-x',
     (setq ghostel--mode-line-tag (ghostel--mode-line-tag-make 'char ":Char"))
     (ghostel--mode-line-refresh)
     (when ghostel--term
+      (deactivate-mark)  ; A region left active would grow with point.
       ;; FORCE: a deliberate switch wins over any roaming veto.
       (goto-char (point-max))
       (ghostel--anchor-window nil t)
@@ -2892,6 +2953,7 @@ Add it to other jump commands as a hook or `:after' advice (see the README)."
       (setq ghostel--pre-readonly-mode nil)
       (if ghostel--readonly-exit-function
           (funcall ghostel--readonly-exit-function)
+        (deactivate-mark)  ; A region left active would grow with point.
         ;; Return to the live viewport before reenabling terminal input.
         (goto-char (point-max))
         (setq ghostel--force-next-redraw t)
@@ -4322,12 +4384,13 @@ for the native child process."
 
 (defun ghostel--spawn-process (program program-args remote-p)
   "Dispatch the spawn of PROGRAM (with PROGRAM-ARGS) to native or Emacs.
-Local PROGRAM is resolved to an absolute path before backend dispatch.
+Local PROGRAM is resolved to an absolute path before backend dispatch;
+a remote PROGRAM is stripped to the path the remote shell sees.
 Local buffers use the native PTY path when `ghostel-use-native-pty'
 is non-nil; remote (REMOTE-P) buffers always go through Emacs so
 TRAMP can manage the remote shell."
   (let* ((program (if remote-p
-                      program
+                      (file-local-name program)
                     (ghostel--resolve-local-executable program)))
          (process (if (and ghostel-use-native-pty (not remote-p))
                       (ghostel--spawn-via-native (cons program program-args))
@@ -4569,6 +4632,22 @@ spans remain handled inside the renderer."
     (when (or ghostel-enable-url-detection ghostel-enable-file-detection)
       (ghostel--queue-plain-link-detection (car region) (cdr region)))))
 
+(defun ghostel--deactivate-repainted-region ()
+  "Deactivate the region when the last redraw rewrote part of it.
+Terminal output replaces text in place, so the selection would be left
+covering text the user never selected.  An empty region is kept,
+as is line mode's: it repaints the whole buffer on every redraw.
+The primary selection keeps the text that was actually selected."
+  (when-let* (((region-active-p))
+              ((not (eq ghostel--input-mode 'line)))
+              ((/= (region-beginning) (region-end)))
+              (repainted ghostel--repainted-region)
+              ((< (region-beginning) (cdr repainted)))
+              ((> (region-end) (car repainted))))
+    (with-demoted-errors "ghostel: deactivate-mark error: %S"
+      (let ((select-active-regions nil))
+        (deactivate-mark)))))
+
 (defun ghostel--daemon-dummy-frame-p (frame)
   "Non-nil if FRAME is the daemon's invisible initial frame.
 Killing a buffer can substitute a ghostel buffer into that frame's sole window.
@@ -4608,13 +4687,13 @@ the selected window's buffer."
   "Non-nil if WINDOW's point lets it follow live terminal output.
 WINDOW's buffer must be current.  Emacs mode follows on the live cursor,
 a line-mode window selected in its frame on the live edge (other windows' point
-carries no user intent); all other modes always follow."
+carries no user intent); all other modes follow unless a region is active."
   (pcase ghostel--input-mode
     ('emacs (ghostel--window-on-cursor-p window))
     ('line (or (not (eq window (frame-selected-window
                                 (window-frame window))))
                (ghostel--line-mode-on-live-edge-p window)))
-    (_ t)))
+    (_ (not (region-active-p)))))
 
 (defun ghostel--window-anchored-p (window &optional body-pixel-height)
   "Non-nil if WINDOW is scrolled to follow the live terminal output.
@@ -4766,12 +4845,12 @@ window over a mostly-empty grid), the anchor starts at the cursor's line
 instead.  `ghostel--window-anchored-p' recognizes such a clamped window
 as still following the output.
 
-Copy mode is never anchored (the viewport is frozen).  Otherwise
-WINDOW anchors while `ghostel--window-follows-p' holds, or when
-FOLLOWING (the caller established the follow before the render moved
-the cursor) or FORCE (deliberate anchors such as paste/yank) is
-non-nil.  Semi-char/char/Emacs snap point to the live cursor; line
-mode keeps the user's point."
+Copy mode is never anchored (the viewport is frozen).
+Otherwise WINDOW anchors while `ghostel--window-follows-p' holds,
+or when FOLLOWING (the caller established the follow before the render moved
+the cursor) or FORCE (deliberate anchors such as paste/yank) is non-nil.
+Semi-char/char/Emacs snap point to the live cursor;
+line mode keeps the user's point."
   (when-let* ((window (or window (selected-window)))
               (buffer (window-buffer window))
               ((with-current-buffer buffer
@@ -4802,7 +4881,7 @@ mode keeps the user's point."
                            (save-excursion
                              (goto-char target)
                              (forward-line
-                              (- (floor (window-screen-lines))))
+                              (- (if (bolp) 0 1) (floor (window-screen-lines))))
                              (list (point) 0))))
                (start (if (and cursor-bol (< cursor-bol (car anchor)))
                           cursor-bol
@@ -4893,6 +4972,7 @@ them during synchronized output or when BUFFER has no render window."
                     (ghostel--write-pty ghostel--term input)
                     (message
                      "ghostel: line-mode prompt lost; input forwarded raw"))))
+              (when rendered (ghostel--deactivate-repainted-region))
               (ghostel--schedule-link-detection))
             ;; Resume line mode if alt-screen just turned off, and update the
             ;; alt-screen-prev cache for the next cycle.
@@ -5231,6 +5311,8 @@ may change freely (`ghostel-compile' finalize relies on this)."
   (setq-local hscroll-margin 0)
   (setq-local truncate-lines t)
   (setq-local scroll-conservatively 101)
+  ;; NBSP is ordinary terminal padding; don't let `nobreak-space' repaint it.
+  (setq-local nobreak-char-display nil)
   (setq-local line-spacing ghostel-line-spacing)
   ;; Shield row geometry from a global `default-text-properties':
   ;; `line-spacing'/`line-height' properties supplied through its fallback
@@ -5414,6 +5496,11 @@ spawn after initialization."
   (unless (eq (null rows) (null cols))
     (user-error "ROWS and COLS must be provided together"))
   (with-current-buffer buffer
+    ;; A local child's chdir failure would only surface as an immediate
+    ;; exit; TRAMP reports remote ones itself.
+    (unless (or (file-remote-p default-directory)
+                (file-directory-p default-directory))
+      (user-error "Ghostel: directory %s does not exist" default-directory))
     (when (process-live-p ghostel--process)
       (user-error "Buffer %s already has a running ghostel process"
                   (buffer-name buffer)))
@@ -5618,12 +5705,16 @@ To run a specific program instead of a shell, see `ghostel-exec'."
         (when (> instance 1)
           (setq buf-name (format "%s<%d>" name instance)))))
     (let ((buffer (ghostel--create buf-name display)))
-      (with-current-buffer buffer
-        (setq ghostel--managed-buffer-name (buffer-name)
-              ghostel--initial-name (buffer-name)
-              ghostel-identity identity)
-        (ghostel--start-process)
-        (ghostel--apply-initial-input-mode))
+      (condition-case err
+          (with-current-buffer buffer
+            (setq ghostel--managed-buffer-name (buffer-name)
+                  ghostel--initial-name (buffer-name)
+                  ghostel-identity identity)
+            (ghostel--start-process)
+            (ghostel--apply-initial-input-mode))
+        ((error quit)
+         (when (buffer-live-p buffer) (kill-buffer buffer))
+         (signal (car err) (cdr err))))
       buffer)))
 
 (defun ghostel--project-buffer-name (root)

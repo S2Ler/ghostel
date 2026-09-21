@@ -56,7 +56,8 @@ recorded `command' or starting a shell.  Respawned buffers are plain
 `ghostel-exec' buffers; kind-specific setup (e.g. eshell's
 visual-command exit behavior) is not restored.
 When a reused shell's directory differs and `ghostel-bookmark-check-dir'
-is non-nil, a `cd' is typed into it; command buffers are left alone."
+is non-nil, a `cd' is typed into it, but only while the shell is idle
+\(see `ghostel-bookmark--shell-idle-p'); command buffers are left alone."
   (ghostel--load-module t)
   (let* ((dir (bookmark-prop-get bmk 'location))
          (buf-name (bookmark-prop-get bmk 'buf-name))
@@ -95,44 +96,48 @@ is non-nil, a `cd' is typed into it; command buffers are left alone."
                   (and b
                        (eq (buffer-local-value 'major-mode b) 'ghostel-mode)
                        (funcall live-p b)))))))
-    ;; Create branch: the program starts directly in DIR (no `cd').  A
-    ;; failed spawn kills the partially created buffer and re-signals.
+    ;; Create branch: the program starts directly in DIR (no `cd').
     (unless buf
       (let ((default-directory (if ghostel-bookmark-check-dir
                                    dir
                                  default-directory)))
-        (condition-case err
-            (if command
+        (if command
+            (condition-case err
                 (progn
                   (setq buf (generate-new-buffer buf-name))
                   (ghostel-exec buf (car command) (cdr command) identity))
-              (setq buf (ghostel--create buf-name))
-              (with-current-buffer buf
-                ;; A nil identity stays nil: a fabricated slot would let
-                ;; plain `ghostel' claim this buffer.
-                (setq ghostel--managed-buffer-name (buffer-name)
-                      ghostel--initial-name (buffer-name)
-                      ghostel-identity identity)
-                (ghostel--start-process)
-                (ghostel--apply-initial-input-mode)))
-          ((error quit)
-           (when (buffer-live-p buf) (kill-buffer buf))
-           (signal (car err) (cdr err))))))
+              ((error quit)
+               (when (buffer-live-p buf) (kill-buffer buf))
+               (signal (car err) (cdr err))))
+          (setq buf (ghostel-create buf-name nil identity)))))
     ;; Reuse branch: `cd' if the live shell has wandered elsewhere.  A
     ;; typed `cd' only makes sense in a shell, not in a command buffer.
     (with-current-buffer buf
       (when (and ghostel-bookmark-check-dir
                  ghostel--term
                  (not (alist-get 'command ghostel-identity))
-                 (not (string-equal default-directory dir)))
-        (when (memq ghostel--input-mode '(copy emacs))
-          (ghostel-readonly-exit))
-        ;; Ghostel records remote dirs as TRAMP paths, so strip the TRAMP prefix
-        ;; with `file-local-name', and quote so paths with spaces survive.
-        (ghostel-send-string
-         (concat "cd " (shell-quote-argument (file-local-name dir))))
-        (ghostel-send-key "return")))
+                 (not (or (string-equal default-directory dir)
+                          (and (not (file-remote-p dir))
+                               (file-equal-p default-directory dir)))))
+        (if (not (ghostel-bookmark--shell-idle-p))
+            (message "Ghostel: %s is busy, staying in %s"
+                     (buffer-name) default-directory)
+          (when (memq ghostel--input-mode '(copy emacs))
+            (ghostel-readonly-exit))
+          ;; We record remote dirs as TRAMP paths, so strip the TRAMP prefix
+          ;; with `file-local-name', and quote so paths with spaces survive.
+          (ghostel-send-string
+           (concat "cd " (shell-quote-argument (file-local-name dir))))
+          (ghostel-send-key "return"))))
     (set-buffer buf)))
+
+(defun ghostel-bookmark--shell-idle-p ()
+  "Return non-nil when the shell sits at an empty prompt.
+Nil while a command or a full-screen program runs."
+  (and (not (ghostel-alt-screen-p))
+       (not ghostel--command-running)
+       ghostel--cursor-char-pos
+       (eq ghostel--cursor-char-pos (ghostel-input-start-point))))
 
 ;; Fills the Type column of `bookmark-bmenu-list' (Emacs 29+).
 (put 'ghostel-bookmark-handler 'bookmark-handler-type "Ghostel")

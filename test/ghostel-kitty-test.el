@@ -116,7 +116,7 @@ The display property and the marker share the same range."
   (ghostel-test--kitty-fixture
    (lambda ()
 	 (insert "row1xx\nrow2xx\n")
-	 (ghostel--kitty-display-image "data" nil 0 0 4 2 32 32 0 0 0 0)
+	 (ghostel--kitty-display-image "data" 0 0 4 2 32 32)
 	 ;; Both rows should have a display property covering them
 	 (should (get-text-property 1 'display))
 	 (should (get-text-property 1 'ghostel-kitty))
@@ -138,7 +138,7 @@ tiles them at the wrong scale once the `default' face is remapped."
                 ((symbol-function 'default-font-width) (lambda () 8))
                 ((symbol-function 'default-font-height) (lambda () 16)))
         (insert "row1xx\nrow2xx\n")
-        (ghostel--kitty-display-image "data" nil 0 0 4 2 32 32 0 0 0 0)
+        (ghostel--kitty-display-image "data" 0 0 4 2 32 32)
         (let ((props (nthcdr 3 image-args)))
           (should (= (plist-get props :width) 32))    ; 4 cols * 8
           (should (= (plist-get props :height) 32)))  ; 2 rows * 16
@@ -151,7 +151,7 @@ tiles them at the wrong scale once the `default' face is remapped."
   (ghostel-test--kitty-fixture
    (lambda ()
 	 (insert "\n\n")
-	 (ghostel--kitty-display-image "data" nil 0 5 4 1 32 16 0 0 0 0)
+	 (ghostel--kitty-display-image "data" 0 5 4 1 32 16)
 	 (let ((ovs (cl-remove-if-not
 				 (lambda (ov) (overlay-get ov 'ghostel-kitty))
 				 (overlays-in (point-min) (point-max)))))
@@ -168,7 +168,7 @@ must survive a clear."
 	 ;; Apply an unrelated display property (e.g. wide-char comp).
 	 (put-text-property 1 3 'display "PRESERVED")
 	 ;; Apply kitty image.
-	 (ghostel--kitty-display-image "data" nil 0 3 3 2 24 32 0 0 0 0)
+	 (ghostel--kitty-display-image "data" 0 3 3 2 24 32)
 	 (should ghostel--kitty-active)
 	 (ghostel--kitty-clear)
 	 ;; Unrelated display survives.
@@ -380,7 +380,7 @@ overlays per row by the number of times the image has been visible."
 	 ;; Re-emit the same placement (image now spans scrollback + viewport).
 	 ;; abs-row=0 means image starts at line 1, grid-rows=4 means it
 	 ;; covers lines 1..4 — all of which are in scrollback.
-	 (ghostel--kitty-display-image "data" nil 0 0 4 4 32 64 0 0 0 0)
+	 (ghostel--kitty-display-image "data" 0 0 4 4 32 64)
 	 ;; Each scrollback row should still have exactly ONE overlay (the
 	 ;; pre-existing one from the earlier emit).
 	 (save-excursion
@@ -394,19 +394,53 @@ overlays per row by the number of times the image has been visible."
 		   (should (= 1 (length ovs-here))))
 		 (forward-line 1))))))
 
-(ert-deftest ghostel-test-kitty-display-virtual-tags-placeholder-line ()
-  "Virtual placement scans for U+10EEEE and tags the placeholder region."
+(ert-deftest ghostel-test-kitty-display-virtual-tags-placeholder-run ()
+  "A virtual run tags only its own placeholders on its row."
   (ghostel-test--kitty-fixture
    (lambda ()
-	 (let ((ph (string #x10EEEE)))
-	   (insert ph ph ph "\n" ph ph ph "\n"))
-	 (ghostel--kitty-display-virtual "data" nil)
-	 (should ghostel--kitty-active)
-	 (should (get-text-property 1 'display))
-	 (should (get-text-property 1 'ghostel-kitty))
-	 ;; Slice geometry follows the buffer's font, not the frame's cell.
-	 (should (equal (car (get-text-property 1 'display))
-			'(slice 0 0 24 16))))))
+     (let ((cell (string #x10EEEE #x0305 #x0305)))
+       (insert "ab" cell cell cell "\n" "ab" cell cell cell "\n")
+       (goto-char (point-min)))
+     ;; Last row, image row 1 of a 3x2 image, run of 3 cells from col 0.
+     (ghostel--kitty-display-virtual "data" 0 0 1 0 3 3 2)
+     (should ghostel--kitty-active)
+     ;; Row 0 untouched, text before the run untouched.
+     (should-not (get-text-property 1 'display))
+     (should-not (get-text-property (line-beginning-position 2) 'display))
+     (let ((start (+ (line-beginning-position 2) (length "ab"))))
+       (should (get-text-property start 'ghostel-kitty))
+       ;; Slice geometry follows the buffer's font: x 0, y row*16, w 3*8.
+       (should (equal (car (get-text-property start 'display))
+                      '(slice 0 16 24 16)))
+       ;; Three cells of three chars each, nothing past them.
+       (should (= (+ start 9) (next-single-property-change start 'display)))))))
+
+(ert-deftest ghostel-test-kitty-display-virtual-width-shortfall-skips ()
+  "A run wider than the row's remaining placeholders is not tagged."
+  (ghostel-test--kitty-fixture
+   (lambda ()
+     (let ((cell (string #x10EEEE #x0305 #x0305)))
+       (insert "ab" cell cell "\n"))
+     (ghostel--kitty-display-virtual "data" 0 0 0 0 3 3 1)
+     (should-not ghostel--kitty-active))))
+
+(ert-deftest ghostel-test-kitty-display-virtual-nth-selects-run ()
+  "A run is located by its placeholder ordinal, not by arrival order."
+  (ghostel-test--kitty-fixture
+   (lambda ()
+     (let ((cell (string #x10EEEE #x0305 #x0305)))
+       (insert "ab" cell cell "xy" cell "\n")
+       (goto-char (point-min)))
+     (let* ((run1 (+ (point-min) (length "ab")))
+            (gap (+ run1 6))
+            (run2 (+ gap (length "xy"))))
+       (ghostel--kitty-display-virtual "right" 0 2 0 0 1 1 1)
+       (should-not (get-text-property run1 'display))
+       (should (equal (car (get-text-property run2 'display)) '(slice 0 0 8 16)))
+       (ghostel--kitty-display-virtual "left" 0 0 0 0 2 2 1)
+       (should (equal (car (get-text-property run1 'display)) '(slice 0 0 16 16)))
+       ;; The first run's tag ends before the gap text.
+       (should (= gap (next-single-property-change run1 'display)))))))
 
 (ert-deftest ghostel-test-kitty-display-image-records-error ()
   "Display-callback errors are captured to a buffer-local variable.
@@ -416,23 +450,30 @@ The error survives past the redraw — not just flashed via `message'."
      (cl-letf (((symbol-function 'create-image)
                 (lambda (&rest _) (error "Boom"))))
        (insert "row\n")
-       (ghostel--kitty-display-image "data" nil 0 0 1 1 8 16 0 0 0 0)
+       (ghostel--kitty-display-image "data" 0 0 1 1 8 16)
        (should ghostel--kitty-last-error)
        (should (eq (car ghostel--kitty-last-error) 'error))))))
 
-(ert-deftest ghostel-test-kitty-display-image-rejects-source-rect ()
-  "Non-default source rect is recorded as an error rather than silent miss.
-Emacs's image system can't crop pre-scale, so any atlas-style placement
-should fail visibly."
-  (ghostel-test--kitty-fixture
-   (lambda ()
-	 (insert "row1xx\nrow2xx\n")
-	 ;; src-w=16 != pixel-w=32 → atlas-style sub-rect.
-	 (ghostel--kitty-display-image "data" nil 0 0 4 2 32 32 0 0 16 32)
-	 (should ghostel--kitty-last-error)
-	 ;; The signaled symbol appears in the err data.
-	 (should (memq 'ghostel-kitty-unsupported-source-rect
-				   (flatten-list ghostel--kitty-last-error))))))
+(ert-deftest ghostel-test-kitty-graphics-emit-crops-source-rect ()
+  "A placement's source rect reaches Elisp as an already-cropped PPM."
+  :tags '(native)
+  (let ((buf (generate-new-buffer " *ghostel-test-kitty-crop*"))
+        (calls nil))
+    (unwind-protect
+        (with-current-buffer buf
+          (let ((term (ghostel--new 5 40 1000))
+                (inhibit-read-only t))
+            (ghostel--set-size term 5 40 1 1)
+            (cl-letf (((symbol-function 'ghostel--kitty-display-image)
+                       (lambda (&rest args) (push args calls)))
+                      ((symbol-function 'display-graphic-p) (lambda () t)))
+              (ghostel--write-vt term ghostel-test--kitty-png-2x2)
+              ;; Top-right pixel of the fixture is blue.
+              (ghostel--write-vt term "\e_Ga=p,i=1,x=1,y=0,w=1,h=1,q=1\e\\")
+              (ghostel--redraw term t))
+            (should calls)
+            (should (equal (car (car calls)) "P6\n1 1\n255\n\0\0\377"))))
+      (kill-buffer buf))))
 
 (ert-deftest ghostel-test-kitty-display-image-clamps-negative-vp-col ()
   "Image partially scrolled off the left renders the visible portion.
@@ -443,7 +484,7 @@ would write properties to the previous line."
    (lambda ()
 	 (insert "abcdefghij\nabcdefghij\n")
 	 ;; vp-col = -2: 2 columns scrolled off, 2 visible (g-cols=4).
-	 (ghostel--kitty-display-image "data" nil 0 -2 4 1 32 16 0 0 0 0)
+	 (ghostel--kitty-display-image "data" 0 -2 4 1 32 16)
 	 (should ghostel--kitty-active)
 	 (should-not ghostel--kitty-last-error)
 	 ;; Display property should land at column 0..2 of the placement
@@ -456,7 +497,7 @@ would write properties to the previous line."
    (lambda ()
 	 (insert "abc\nabc\n")
 	 ;; g-cols=4, vp-col=-5 → start-col=5 > g-cols → visible-cols=0.
-	 (ghostel--kitty-display-image "data" nil 0 -5 4 1 32 16 0 0 0 0)
+	 (ghostel--kitty-display-image "data" 0 -5 4 1 32 16)
 	 (should-not ghostel--kitty-active)
 	 (should-not ghostel--kitty-last-error))))
 
@@ -493,20 +534,118 @@ now we verify only the arguments the native module hands off."
 			  (ghostel--redraw term t))
 			(should calls)
 			(let ((args (car calls)))
-			  ;; (data is-png abs-row vp-col grid-cols grid-rows
-			  ;;  pixel-w pixel-h src-x src-y src-w src-h)
+			  ;; (data abs-row vp-col grid-cols grid-rows pixel-w pixel-h)
 			  (should (stringp (nth 0 args)))
 			  ;; PPM header starts with "P6" — we converted RGB→PPM in
 			  ;; the Zig layer.
 			  (should (string-prefix-p "P6" (nth 0 args)))
-			  (should (eq (nth 1 args) nil))               ; is-png = nil (PPM)
-			  (should (integerp (nth 2 args)))             ; abs-row
-			  (should (integerp (nth 3 args)))             ; vp-col
-			  (should (= (nth 4 args) 2))                  ; grid-cols
-			  (should (= (nth 5 args) 2))                  ; grid-rows
-			  (should (= (nth 6 args) 2))                  ; pixel-w
-			  (should (= (nth 7 args) 2)))))               ; pixel-h
+			  (should (integerp (nth 1 args)))             ; abs-row
+			  (should (integerp (nth 2 args)))             ; vp-col
+			  (should (= (nth 3 args) 2))                  ; grid-cols
+			  (should (= (nth 4 args) 2))                  ; grid-rows
+			  (should (= (nth 5 args) 2))                  ; pixel-w
+			  (should (= (nth 6 args) 2)))))               ; pixel-h
 	  (kill-buffer buf))))
+
+(defconst ghostel-test--kitty-png-2x2
+  (concat "\e_Ga=t,f=100,i=1,q=1;"
+          "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAA"
+          "E0lEQVR4nGP4z8AAQmAKSDAwAAA/0gX7BydG0gAAAABJRU5E"
+          "rkJggg==\e\\")
+  "Transmit a 2x2 PNG as image id 1.")
+
+(defun ghostel-test--kitty-virtual-calls (vt &optional place cell after)
+  "Feed VT after a virtual placement and return the virtual callbacks.
+PLACE overrides the default 2x2-cell placement command; CELL is the cell
+pixel size (default 1).  AFTER is a list of further feeds, each followed
+by an unforced redraw; only the last redraw's callbacks are returned."
+  (let ((buf (generate-new-buffer " *ghostel-test-kitty-virtual*"))
+        (calls nil))
+    (unwind-protect
+        (with-current-buffer buf
+          (let ((term (ghostel--new 5 40 1000)))
+            (ghostel--set-size term 5 40 (or cell 1) (or cell 1))
+            (cl-letf (((symbol-function 'ghostel--kitty-display-virtual)
+                       (lambda (&rest args) (push args calls)))
+                      ((symbol-function 'display-graphic-p) (lambda () t)))
+              (ghostel--write-vt term (concat ghostel-test--kitty-png-2x2
+                                              (or place "\e_Ga=p,i=1,U=1,c=2,r=2,q=1\e\\")
+                                              vt))
+              (ghostel--redraw term t)
+              (dolist (more after)
+                (ghostel--write-vt term more)
+                (setq calls nil)
+                (ghostel--redraw term nil)))
+            (nreverse calls)))
+      (kill-buffer buf))))
+
+(ert-deftest ghostel-test-kitty-virtual-emits-one-call-per-placeholder-row ()
+  "Each placeholder row in the viewport yields one callback.
+The image row comes from the diacritics, not from buffer line order."
+  :tags '(native)
+  (let* ((r0 (string #x10EEEE #x0305 #x0305 #x10EEEE #x0305 #x030D))
+         (r1 (string #x10EEEE #x030D #x0305 #x10EEEE #x030D #x030D))
+         ;; Second image row first, so line order and image row differ.
+         (calls (ghostel-test--kitty-virtual-calls
+                 (concat "\e[38;5;1m" r1 "\r\n" r0 "\e[39m"))))
+    (should (= (length calls) 2))
+    ;; (data row-up nth img-row img-col width grid-cols grid-rows);
+    ;; rows 0 and 1 of a 5-row screen are 4 and 3 rows above the last.
+    (should (string-prefix-p "P6" (nth 0 (car calls))))
+    (should (equal (nthcdr 1 (car calls)) '(4 0 1 0 2 2 2)))
+    (should (equal (nthcdr 1 (cadr calls)) '(3 0 0 0 2 2 2)))))
+
+(ert-deftest ghostel-test-kitty-virtual-second-image-on-row ()
+  "A second image's run reports its ordinal and its own placement.
+The placement id comes from the underline colour."
+  :tags '(native)
+  (let* ((r0 (string #x10EEEE #x0305 #x0305 #x10EEEE #x0305 #x030D))
+         (cell (string #x10EEEE #x0305 #x0305))
+         (calls (ghostel-test--kitty-virtual-calls
+                 (concat (replace-regexp-in-string "i=1" "i=2" ghostel-test--kitty-png-2x2)
+                         "\e_Ga=p,i=2,p=7,U=1,c=1,r=1,q=1\e\\"
+                         "ab\e[38;5;1m" r0 "\e[39mxy"
+                         "\e[38;5;2;58;5;7m" cell "\e[39;59m"))))
+    (should (= (length calls) 2))
+    (should (equal (nthcdr 1 (car calls)) '(4 0 0 0 2 2 2)))
+    (should (equal (nthcdr 1 (cadr calls)) '(4 2 0 0 1 1 1)))))
+
+(ert-deftest ghostel-test-kitty-virtual-grid-falls-back-to-image-size ()
+  "Without c=/r= the grid is the image size in cells."
+  :tags '(native)
+  (let ((calls (ghostel-test--kitty-virtual-calls
+                (concat "\e[38;5;1m" (string #x10EEEE #x0305 #x0305) "\e[39m")
+                "\e_Ga=p,i=1,U=1,q=1\e\\" 3)))
+    ;; A 2px image in 3px cells rounds up to one cell.
+    (should (equal (nthcdr 1 (car calls)) '(4 0 0 0 1 1 1)))))
+
+(ert-deftest ghostel-test-kitty-virtual-row-counts-from-bottom ()
+  "ROW-UP counts from the last screen row, so scrollback does not shift it."
+  :tags '(native)
+  (let* ((r0 (string #x10EEEE #x0305 #x0305))
+         ;; 8 line feeds on a 5-row terminal: the run is on the last row.
+         (calls (ghostel-test--kitty-virtual-calls
+                 (concat (make-string 8 ?\n) "\e[38;5;1m" r0 "\e[39m"))))
+    (should (= (length calls) 1))
+    (should (equal (nthcdr 1 (car calls)) '(0 0 0 0 1 2 2)))))
+
+(ert-deftest ghostel-test-kitty-virtual-run-scrolled-out-since-last-redraw-emits ()
+  "A run pushed out of the active area since the previous redraw is tagged."
+  :tags '(native)
+  (let ((calls (ghostel-test--kitty-virtual-calls
+                (concat "\e[38;5;1m" (string #x10EEEE #x0305 #x0305) "\e[39m")
+                nil nil (list (make-string 8 ?\n)))))
+    (should (= (length calls) 1))
+    ;; Screen row 0 with the cursor on row 8.
+    (should (equal (nthcdr 1 (car calls)) '(8 0 0 0 1 2 2)))))
+
+(ert-deftest ghostel-test-kitty-virtual-stale-placement-emits-nothing ()
+  "A placement whose placeholders left the screen earlier emits nothing."
+  :tags '(native)
+  (should-not (ghostel-test--kitty-virtual-calls "no placeholders here"))
+  (should-not (ghostel-test--kitty-virtual-calls
+               (concat "\e[38;5;1m" (string #x10EEEE #x0305 #x0305) "\e[39m")
+               nil nil (list (make-string 8 ?\n) ""))))
 
 (provide 'ghostel-kitty-test)
 ;;; ghostel-kitty-test.el ends here

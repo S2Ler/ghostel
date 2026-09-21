@@ -10,9 +10,9 @@
 ;; not scrollback or session contents.
 
 ;; Command buffers (`ghostel-exec', `ghostel-compile', eshell visual
-;; commands), remote (TRAMP) terminals, and terminals whose directory no
-;; longer exists are skipped at restore time, with a message: an unattended
-;; restore should not re-run a saved command or open TRAMP connections.
+;; commands) and remote (TRAMP) terminals are skipped at restore time,
+;; with a message: an unattended restore should not re-run a saved
+;; command or open TRAMP connections.
 
 ;; Every restored terminal spawns a real shell; `desktop-restore-eager'
 ;; limits how many are restored during `desktop-read' itself.
@@ -34,8 +34,8 @@ to the desktop file in plaintext."
   "Restore a ghostel terminal named BUFFER-NAME from desktop data MISC.
 MISC is (DIRECTORY IDENTITY) as saved by `ghostel-desktop-save-buffer'.
 Reuse a live buffer matching IDENTITY, else start a fresh shell in DIRECTORY
-under BUFFER-NAME -- skipping remote and missing directories and command
-identities, with a message.  Return the buffer, or nil when skipping."
+under BUFFER-NAME -- skipping remote directories and command identities,
+with a message.  Return the buffer, or nil when skipping."
   (pcase-let ((`(,dir ,identity) misc))
     ;; Desktop files are external data; treat a non-alist identity as absent.
     (unless (consp identity) (setq identity nil))
@@ -71,9 +71,9 @@ identity included."
       buf)))
 
 (defun ghostel-desktop--spawn (dir identity buffer-name)
-  "Start a shell in DIR under BUFFER-NAME with IDENTITY as its identity.
-Skip -- returning nil, with a message -- remote or missing directories
-and command-running identities."
+  "Start a shell in DIR under BUFFER-NAME, stamped with IDENTITY.
+Return the buffer.  A remote DIR or an IDENTITY that ran a command is
+not restored: return nil and say so in a message."
   (cond
    ((file-remote-p dir)
     (message "Desktop: skipping remote ghostel terminal %s" buffer-name)
@@ -81,10 +81,6 @@ and command-running identities."
    ((or (alist-get 'command identity)
         (eq (alist-get 'kind identity) 'compile))
     (message "Desktop: not respawning ghostel command buffer %s" buffer-name)
-    nil)
-   ((not (file-directory-p dir))
-    (message "Desktop: skipping ghostel terminal %s, directory %s is gone"
-             buffer-name dir)
     nil)
    (t
     (ghostel--load-module)

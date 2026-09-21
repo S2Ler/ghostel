@@ -4,6 +4,81 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.56.0] — 2026-09-19
+
+### Added
+- A Ghostel menu-bar menu: input-mode switching as a radio group, signals,
+  prompt and link navigation, clipboard and screen commands, terminal
+  buffer management, and the debug commands.  Reachable from every input
+  mode.
+- `ghostel-bold` and `ghostel-italic`, inheriting `ansi-color-bold` and
+  `ansi-color-italic`, now carry the bold and italic terminal attributes.
+  Bold and italic text follows those faces instead of a hardcoded weight
+  and slant, so softening `bold` for a light default face reaches
+  terminal output.
+  Fixes [#700](https://github.com/dakra/ghostel/issues/700).
+
+### Fixed
+- Kitty graphics placements with a source rect (`x`, `y`, `w`, `h`) show
+  that sub-image.  Every such placement was refused on each redraw with
+  `ghostel-kitty-unsupported-source-rect`, including scale-to-fit previews
+  that spell out the full image size.  A placement clipped by a scroll
+  inside a margin region shows its visible part.
+  Fixes [#706](https://github.com/dakra/ghostel/issues/706).
+- A mouse selection left active with `ghostel-mouse-drag-input-mode` nil
+  no longer grows to the prompt when the window is resized or output
+  arrives: a window whose buffer holds an active region no longer follows
+  output, as in Emacs mode.  Terminal input clears the region and
+  re-anchors the selected window.
+  Fixes [#695](https://github.com/dakra/ghostel/issues/695).
+- Switching to a live input mode clears an active region before snapping
+  point to the end of the buffer.  A mouse selection left active stretched
+  to the prompt and reached the primary selection: on the keystroke that
+  exits a read-only mode entered by leaving the buffer and returning, on
+  entering char mode, and on leaving line mode.
+  Fixes [#698](https://github.com/dakra/ghostel/issues/698).
+- A selection is deactivated when terminal output repaints the rows it
+  covers, instead of staying highlighted over replaced text.  The common
+  case is an alternate-screen program redrawing after a window resize.
+  The primary selection keeps the selected text; line mode, which
+  repaints the whole buffer on every redraw, is exempt.
+  Fixes [#704](https://github.com/dakra/ghostel/issues/704).
+- Line mode keeps point, window starts and the mark where they were when a
+  window is resized over a long scrollback, instead of dropping point into
+  the middle of the window or back to the top of the buffer.
+  Fixes [#699](https://github.com/dakra/ghostel/issues/699).
+
+## [0.55.0] — 2026-09-17
+
+### Added
+- `ghostel-org`: a `ghostel:` Org link type naming a directory and,
+  optionally, a buffer (`ghostel:DIR::NAME`).  Following the first pops to
+  a live terminal in that directory or starts a shell there; the second
+  behaves like a bookmark.  `org-store-link` in a ghostel buffer stores
+  the latter.  Enable with `(with-eval-after-load 'org (require 'ghostel-org))`.
+  Fixes [#653](https://github.com/dakra/ghostel/issues/653).
+
+### Changed
+- Jumping to a bookmark only types the `cd` into an idle shell: not while
+  a command runs, on the alternate screen, or with input on the prompt
+  line.  A busy shell is still switched to, with a message.
+- A shell created for a bookmark without a recorded identity now gets the
+  plain-terminal slot for its name, so `ghostel` can claim the buffer
+  instead of opening a second one.
+
+### Fixed
+- Eshell visual commands run from a TRAMP directory (`/ssh:`, `/sudo::`)
+  no longer fail with "Selecting deleted buffer" or a remote "No such
+  file or directory".  Fixes [#693](https://github.com/dakra/ghostel/issues/693).
+- Starting a terminal in a directory that no longer exists signals a
+  `user-error` instead of showing a shell that exits immediately, and a
+  failed shell spawn no longer leaves an empty buffer behind.
+- A terminal reply (cursor position, device attributes, color queries) no
+  longer freezes Emacs when the child's input queue is full: the native PTY
+  drops the reply instead of blocking the reader thread.
+
+## [0.54.0] — 2026-09-15
+
 ### Added
 - `ghostel-tty-forward-notify`: a `ghostel-notification-function` that
   re-emits OSC 9 / OSC 777 notifications to the outer terminal on tty
@@ -13,12 +88,27 @@ All notable changes to this project will be documented in this file.
   (`C-x C-c`): one prompt listing every ghostel buffer with a running command
   (`auto`, needs OSC 133 shell integration) or a live process (`t`).
 
+### Changed
+- A file path ending a sentence (`written to /tmp/notes.md.`) is
+  detected as a link without the trailing punctuation.
+
 ### Fork defaults
 - This fork keeps `ghostel-kitty-graphics-mediums` at nil to accept inline
   image data only.  File, temporary-file, and shared-memory loading remain
   opt-in, including for broot and ranger previews.
 
 ### Fixed
+- Redraws no longer scan the whole buffer for kitty Unicode placeholders,
+  so a stale virtual placement (e.g. after a kitty image tool exited)
+  no longer makes every redraw slow after large output such as `rg`
+  over long single-line JSON files.  Placeholder images also take their
+  slice row from the placeholder's diacritics instead of buffer line
+  order.  Fixes [#673](https://github.com/dakra/ghostel/issues/673).
+- Mouse clicks and wheel events land on the right cell under
+  `text-scale-mode`, `buffer-face-mode`, or a theme that remaps the
+  default face: cells are measured with the window's font metrics
+  instead of the frame's character size.
+  Fixes [#676](https://github.com/dakra/ghostel/issues/676).
 - The native PTY's window size (`TIOCGWINSZ`) carries the cell pixel
   geometry, so image tools that size kitty graphics from it (broot,
   ranger) no longer fall back to text rendering.
@@ -35,6 +125,12 @@ All notable changes to this project will be documented in this file.
   a 1×1 px answer to XTWINOPS CSI 14/16 t and stretches its images;
   the cell geometry now applies before the first redraw.  Fixes
   [#642](https://github.com/dakra/ghostel/issues/642).
+
+### Internal
+- Bumped ghostty to 0c2a290d3 and adapted to the ghostty-vt API changes
+  (scrollback option, palette allocator, stream options, kitty image
+  data union).  Kitty relative placements are drawn via the resolved
+  parent chain and clipped on all four edges like upstream.
 
 ## [0.53.0] — 2026-09-02
 
