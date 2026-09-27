@@ -32,7 +32,10 @@
 (require 'thingatpt)
 
 (declare-function ghostel--enter-readonly-input-mode "ghostel")
+(declare-function ghostel--file-uri-decode "ghostel" (path))
 (declare-function ghostel--local-host-p "ghostel" (host))
+(declare-function ghostel--tramp-path "ghostel" (host path))
+(declare-function ghostel--windows-local-path "ghostel" (path))
 (defvar ghostel--input-mode)
 (defvar ghostel--cursor-char-pos)
 
@@ -166,10 +169,9 @@ For `eldoc-documentation-functions'."
 
 (defun ghostel--open-link (url)
   "Open URL, dispatching by scheme.
-Local file: URIs open in Emacs; non-local URIs use `browse-url'.
-fileref: URIs (from auto-detected file[:line[:col]] patterns) open
-the file at the given position in another window.  A fileref without
-a line suffix opens at the start of the file or directory."
+file:// and fileref: URIs open in another window, file:// over TRAMP
+for a remote host.  A fileref: (auto-detected file[:line[:col]]) opens
+at its position.  Other schemes use `browse-url'."
   (when (and url (stringp url))
     (cond
      ((string-match ghostel--fileref-regex url)
@@ -184,19 +186,16 @@ a line suffix opens at the start of the file or directory."
             (goto-char (point-min))
             (forward-line (1- (max 1 line)))
             (when col (move-to-column (max 0 (1- col))))))))
-     ((let ((case-fold-search t))
-        (string-match "\\`file:\\(?://\\([^/]*\\)\\)?\\(/[^?#]*\\)" url))
-      (let* ((host (match-string 1 url))
-             (path (match-string 2 url))
-             (file (decode-coding-string
-                    (url-unhex-string (encode-coding-string path 'utf-8) t)
-                    'utf-8-unix)))
-        (if (ghostel--local-host-p host)
-            (find-file (if (and (eq system-type 'windows-nt)
-                                (string-match-p "\\`/[[:alpha:]]:/" file))
-                           (substring file 1)
-                         file))
-          (browse-url url))))
+     ((string-match "\\`file://\\([^/]*\\)\\(/.*\\)" url)
+      (let ((host (downcase (match-string 1 url)))
+            (file (ghostel--file-uri-decode (match-string 2 url))))
+        (when file
+          (find-file-other-window
+           (cond ((not (ghostel--local-host-p host))
+                  (ghostel--tramp-path host file))
+                 ((eq system-type 'windows-nt)
+                  (ghostel--windows-local-path file))
+                 (t file))))))
      ((string-match-p "\\`[a-z]+://" url)
       (browse-url url)))))
 

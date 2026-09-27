@@ -3614,6 +3614,26 @@ Cygwin \"/cygdrive/d/foo\" mounts to the existing \"d:/foo\" directory."
           translated
         path))))
 
+(defun ghostel--file-uri-decode (path)
+  "Percent-decode the file URI PATH as UTF-8, or nil if it contains NUL.
+Encoding first keeps `url-unhex-string' from mangling unescaped
+multibyte text; utf-8-unix keeps a %0D carriage return intact."
+  (let ((decoded (decode-coding-string
+                  (url-unhex-string (encode-coding-string path 'utf-8) t)
+                  'utf-8-unix)))
+    (unless (string-match-p "\0" decoded)
+      decoded)))
+
+(defun ghostel--tramp-path (host path)
+  "Return a TRAMP file name for PATH on HOST.
+HOST is ignored when `default-directory' is remote; its prefix is reused."
+  (let ((prefix (file-remote-p default-directory)))
+    (if prefix
+        (concat prefix path)
+      (format "/%s:%s:%s"
+              (or ghostel-tramp-default-method tramp-default-method)
+              host path))))
+
 (defun ghostel--local-host-p (host)
   "Return non-nil if HOST refers to the local machine.
 A trailing \".local\" (mDNS) suffix on HOST is ignored: the macOS
@@ -3654,17 +3674,7 @@ URL does not match the local machine, construct a TRAMP path."
                   filename
                   (if (equal (match-string 1 dir) "kitty-shell-cwd")
                       raw
-                    ;; The encode step keeps `url-unhex-string' from
-                    ;; mangling multibyte text that arrived unescaped;
-                    ;; utf-8-unix stops eol detection from rewriting a
-                    ;; %0D carriage return to LF.
-                    (let ((decoded (decode-coding-string
-                                    (url-unhex-string
-                                     (encode-coding-string raw 'utf-8) t)
-                                    'utf-8-unix)))
-                      ;; %00 never names a real directory, and a NUL
-                      ;; would make `file-directory-p' signal.
-                      (if (string-match-p "\0" decoded) raw decoded))))
+                    (or (ghostel--file-uri-decode raw) raw)))
             ;; A Windows-style $PWD ("d:/...", no leading slash) glues
             ;; its drive spec onto the authority: scheme://HOSTd:/...
             ;; Only a local-host prefix disambiguates this from an RFC 3986
@@ -3691,16 +3701,7 @@ URL does not match the local machine, construct a TRAMP path."
                                 (file-directory-p raw))
                            raw
                          filename))
-          ;; Remote host - construct a TRAMP path.
-          ;; Reuse the full remote prefix from default-directory
-          ;; when available (preserves multi-hop, method, user).
-          (let ((prefix (file-remote-p default-directory)))
-            (setq path (if prefix
-                           (concat prefix filename)
-                         (format "/%s:%s:%s"
-                                 (or ghostel-tramp-default-method
-                                     tramp-default-method)
-                                 host filename))))))
+          (setq path (ghostel--tramp-path host filename))))
       (when (and path (not (string= path "")))
         (if (file-remote-p path)
             ;; Trust the shell's report; skip file-directory-p to avoid
