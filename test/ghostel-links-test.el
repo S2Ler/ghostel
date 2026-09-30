@@ -157,6 +157,30 @@ row.  Navigation should land on the link only once, not on each chunk."
   (should (null (ghostel--open-link nil)))                 ; open-link returns nil for empty
   (should (null (ghostel--open-link 42))))
 
+(ert-deftest ghostel-test-open-file-uri ()
+  "File URIs open in another window, locally or over TRAMP."
+  (let ((ghostel-tramp-default-method "ssh")
+        opened)
+    (cl-letf (((symbol-function 'find-file-other-window)
+               (lambda (file) (setq opened file))))
+      (pcase-dolist (`(,system-type ,default-directory ,url ,expected)
+                     `((gnu/linux "/tmp/" "file:///tmp/caf%C3%A9.txt"
+                                  "/tmp/caf\u00e9.txt")
+                       (gnu/linux "/tmp/" ,(concat "file://" (system-name) "/tmp/x")
+                                  "/tmp/x")
+                       (gnu/linux "/tmp/" "file:///tmp/a%0Ab#c" "/tmp/a\nb#c")
+                       (gnu/linux "/tmp/" "file:///tmp/a%00b" nil)
+                       (gnu/linux "/tmp/" "file:///C:/x.txt" "/C:/x.txt")
+                       (gnu/linux "/tmp/" "file://Remote/tmp/x" "/ssh:remote:/tmp/x")
+                       (gnu/linux "/ssh:user@remote:/home/" "file://remote/tmp/x"
+                                  "/ssh:user@remote:/tmp/x")
+                       (windows-nt "/tmp/" "file:///C:/a%20b.txt" "C:/a b.txt")
+                       (windows-nt "/tmp/" "file://localhost/d:\\x.txt"
+                                   "d:\\x.txt")))
+        (setq opened nil)
+        (ghostel--open-link url)
+        (should (equal opened expected))))))
+
 (ert-deftest ghostel-test-uri-at-pos-returns-string-help-echo ()
   "`ghostel--uri-at-pos' returns a string `help-echo'."
   (with-temp-buffer
