@@ -1642,26 +1642,6 @@ buffer stuck in copy mode."
       (should exit-called)
       (should (equal '("return" "") send-args)))))
 
-(ert-deftest ghostel-test-readonly-RET-no-send-when-returning-to-emacs-mode ()
-  "RET in copy mode returning to Emacs mode exits but does not send a CR.
-Emacs mode is read-only too — sending RET would do nothing useful."
-  :tags '(native)
-  (let ((exit-called nil)
-        (send-called nil))
-    (with-temp-buffer
-      (setq-local ghostel--term 'fake)
-      (setq-local ghostel--input-mode 'copy)
-      (setq-local ghostel--pre-readonly-mode 'emacs)
-      (cl-letf (((symbol-function 'ghostel--uri-at-pos)
-                 (lambda (_p) nil))
-                ((symbol-function 'ghostel-readonly-exit)
-                 (lambda () (setq exit-called t)))
-                ((symbol-function 'ghostel--send-encoded)
-                 (lambda (&rest _) (setq send-called t))))
-        (ghostel-readonly-RET-or-exit-and-send))
-      (should exit-called)
-      (should-not send-called))))
-
 (ert-deftest ghostel-test-readonly-RET-bound-only-with-fast-exit ()
   "RET hits `ghostel-readonly-RET-or-exit-and-send' only when fast-exit is on.
 With fast-exit off the parent map's `ghostel-open-link-at-point'

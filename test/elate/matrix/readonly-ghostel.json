@@ -1,0 +1,256 @@
+{
+  "name": "readonly-ghostel",
+  "comment": "Read-only input modes without evil. Fast exit forwards a typed key to the terminal, also in copy mode entered from Emacs mode; q in nested read-only modes leaves read-only mode entirely; prompt navigation and isearch landings enter copy mode; RET off a link exits and runs the line; output held during a copy-mode freeze renders on exit. The shell's output is the oracle. Driven on zsh.",
+  "session": {
+    "ui": "tty",
+    "size": "100x30",
+    "config": "minimal",
+    "eval": [
+      "(load \"/Users/daniel/.emacs.d/lib/ghostel/test/elate/lib/ghostel-setup.el\")",
+      "(setq ghostel-shell \"/bin/zsh\")"
+    ]
+  },
+  "steps": [
+    {
+      "eval": "(ghostel)"
+    },
+    {
+      "wait": "idle",
+      "min_idle": 1.0,
+      "timeout": 15.0
+    },
+    {
+      "group": "prompt",
+      "comment": "short prompt, a few commands so there are earlier prompts to jump to"
+    },
+    {
+      "type": "PROMPT='> '; RPROMPT=''"
+    },
+    {
+      "keys": "RET"
+    },
+    {
+      "wait": "idle",
+      "min_idle": 0.5,
+      "timeout": 5.0
+    },
+    {
+      "type": "echo r01"
+    },
+    {
+      "keys": "RET"
+    },
+    {
+      "wait": "text",
+      "pattern": "^r01$",
+      "timeout": 8.0
+    },
+    {
+      "type": "echo r02"
+    },
+    {
+      "keys": "RET"
+    },
+    {
+      "wait": "text",
+      "pattern": "^r02$",
+      "timeout": 8.0
+    },
+    {
+      "group": "fast-exit",
+      "comment": "typing in copy mode exits and sends the key"
+    },
+    {
+      "eval": "(when (memq ghostel--input-mode '(copy emacs)) (ghostel-readonly-exit))"
+    },
+    {
+      "keys": "C-c C-t"
+    },
+    {
+      "eval": "(unless (eq ghostel--input-mode 'copy) (error \"MODE %s\" ghostel--input-mode))"
+    },
+    {
+      "type": "echo n01ok"
+    },
+    {
+      "eval": "(unless (eq ghostel--input-mode 'semi-char) (error \"MODE %s\" ghostel--input-mode))"
+    },
+    {
+      "keys": "RET"
+    },
+    {
+      "wait": "text",
+      "pattern": "^n01ok$",
+      "timeout": 8.0
+    },
+    {
+      "group": "nested-fast-exit",
+      "comment": "copy mode entered from Emacs mode: the typed key is sent, not dropped"
+    },
+    {
+      "eval": "(when (memq ghostel--input-mode '(copy emacs)) (ghostel-readonly-exit))"
+    },
+    {
+      "keys": "C-c C-e C-c C-t"
+    },
+    {
+      "eval": "(unless (eq ghostel--input-mode 'copy) (error \"MODE %s\" ghostel--input-mode))"
+    },
+    {
+      "type": "echo n02ok"
+    },
+    {
+      "eval": "(unless (eq ghostel--input-mode 'semi-char) (error \"MODE %s\" ghostel--input-mode))"
+    },
+    {
+      "keys": "RET"
+    },
+    {
+      "wait": "text",
+      "pattern": "^n02ok$",
+      "timeout": 8.0
+    },
+    {
+      "group": "nested-q",
+      "comment": "q after Emacs -> copy leaves read-only mode, not back to Emacs mode"
+    },
+    {
+      "eval": "(when (memq ghostel--input-mode '(copy emacs)) (ghostel-readonly-exit))"
+    },
+    {
+      "keys": "C-c C-e C-c C-t q"
+    },
+    {
+      "eval": "(unless (eq ghostel--input-mode 'semi-char) (error \"MODE %s\" ghostel--input-mode))"
+    },
+    {
+      "type": "echo n03ok"
+    },
+    {
+      "keys": "RET"
+    },
+    {
+      "wait": "text",
+      "pattern": "^n03ok$",
+      "timeout": 8.0
+    },
+    {
+      "group": "prompt-nav",
+      "comment": "C-c M-p enters copy mode on an earlier prompt; typing exits to the live prompt"
+    },
+    {
+      "eval": "(when (memq ghostel--input-mode '(copy emacs)) (ghostel-readonly-exit))"
+    },
+    {
+      "keys": "C-c M-p"
+    },
+    {
+      "eval": "(unless (eq ghostel--input-mode 'copy) (error \"MODE %s\" ghostel--input-mode))"
+    },
+    {
+      "eval": "(when (= (point) ghostel--cursor-char-pos) (error \"NO JUMP\"))"
+    },
+    {
+      "type": "echo n04ok"
+    },
+    {
+      "keys": "RET"
+    },
+    {
+      "wait": "text",
+      "pattern": "^n04ok$",
+      "timeout": 8.0
+    },
+    {
+      "group": "isearch",
+      "comment": "an isearch landing enters copy mode; typing exits to the live prompt"
+    },
+    {
+      "eval": "(when (memq ghostel--input-mode '(copy emacs)) (ghostel-readonly-exit))"
+    },
+    {
+      "keys": "M-x isearch-backward RET r 0 1 RET"
+    },
+    {
+      "wait": "idle",
+      "min_idle": 0.5,
+      "timeout": 5.0
+    },
+    {
+      "eval": "(unless (eq ghostel--input-mode 'copy) (error \"MODE %s\" ghostel--input-mode))"
+    },
+    {
+      "type": "echo n05ok"
+    },
+    {
+      "keys": "RET"
+    },
+    {
+      "wait": "text",
+      "pattern": "^n05ok$",
+      "timeout": 8.0
+    },
+    {
+      "group": "RET",
+      "comment": "RET in copy mode off a link exits and runs the typed line"
+    },
+    {
+      "eval": "(when (memq ghostel--input-mode '(copy emacs)) (ghostel-readonly-exit))"
+    },
+    {
+      "type": "echo n06ok"
+    },
+    {
+      "keys": "C-c C-t"
+    },
+    {
+      "eval": "(unless (eq ghostel--input-mode 'copy) (error \"MODE %s\" ghostel--input-mode))"
+    },
+    {
+      "keys": "RET"
+    },
+    {
+      "wait": "text",
+      "pattern": "^n06ok$",
+      "timeout": 8.0
+    },
+    {
+      "eval": "(unless (eq ghostel--input-mode 'semi-char) (error \"MODE %s\" ghostel--input-mode))"
+    },
+    {
+      "group": "freeze",
+      "comment": "output held by the copy-mode freeze renders on exit"
+    },
+    {
+      "eval": "(when (memq ghostel--input-mode '(copy emacs)) (ghostel-readonly-exit))"
+    },
+    {
+      "type": "sleep 1; echo late7"
+    },
+    {
+      "keys": "RET C-c C-t"
+    },
+    {
+      "eval": "(unless (eq ghostel--input-mode 'copy) (error \"MODE %s\" ghostel--input-mode))"
+    },
+    {
+      "wait": "idle",
+      "min_idle": 2.5,
+      "timeout": 10.0
+    },
+    {
+      "eval": "(when (ghostel-elate--has-line \"late7\") (error \"NOT FROZEN\"))"
+    },
+    {
+      "keys": "q"
+    },
+    {
+      "eval": "(unless (eq ghostel--input-mode 'semi-char) (error \"MODE %s\" ghostel--input-mode))"
+    },
+    {
+      "wait": "text",
+      "pattern": "^late7$",
+      "timeout": 8.0
+    }
+  ]
+}

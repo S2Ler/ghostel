@@ -477,14 +477,15 @@ on the live terminal cursor the window follows the new output; the moment you
 navigate away (or start a selection) the following stops and point stays where
 you put it, resuming once point returns to the cursor (=M->= jumps back to it).
 
-*Typed keys do not reach the shell* - Emacs mode is a "look but don't touch"
-view.  Self-insert, =RET=, =TAB=, =DEL= fall through to the read-only buffer and
-trigger =text-read-only=, so a stray keystroke cannot accidentally land at the
-prompt.  Switch to semi-char mode (=C-c C-j=) when you want to type to the shell.
-=C-y= is the exception: it pastes via bracketed paste as a deliberate action and
-snaps point back to the live cursor.
+With =ghostel-readonly-fast-exit= (the default), typing a character exits Emacs
+mode and sends it to the shell.  With it off, Emacs mode is a "look but don't
+touch" view: self-insert, =RET=, =TAB=, =DEL= fall through to the read-only
+buffer and trigger =text-read-only=, so a stray keystroke cannot land at the
+prompt; switch to semi-char mode (=C-c C-j=) to type to the shell.  =C-y= pastes
+via bracketed paste either way and snaps point back to the live cursor.
 
-=C-c C-e= toggles Emacs mode off again (returning to the mode you came from), and
+=C-c C-e= toggles Emacs mode off again (returning to the mode active before
+entering read-only mode), and
 =C-c C-t= switches to copy mode to freeze the output.
 
 Use this for searching through scrollback while a build is running, filtering
@@ -1486,7 +1487,7 @@ tables below group them by area; defaults shown are the out-of-the-box values.
 | =ghostel-mouse-drag-input-mode=        | =default=           | Mode to enter after a click/drag/multi-click selection: =default=, =copy=, =emacs=, or =nil=.                                                                                                                               |
 | =ghostel-mark-activation-input-mode=   | =default=           | Mode to enter when a command activates the mark: =default=, =copy=, =emacs=, or =nil=.                                                                                                                                      |
 | =ghostel-point-leave-input-mode=       | =default=           | Mode to enter when point leaves the input point (isearch/minibuffer): =default=, =copy=, =emacs=, or =nil=.                                                                                                                 |
-| =ghostel-prompt-navigation-input-mode= | =default=           | Mode to enter for prompt navigation (=C-c M-n= / =C-c M-p=, imenu): =default=, =copy=, or =emacs=.                                                                                                                            |
+| =ghostel-prompt-navigation-input-mode= | =default=           | Mode to enter for prompt navigation (=C-c M-n= / =C-c M-p=, imenu): =default=, =copy=, =emacs=, or =nil=.                                                                                                                     |
 | =ghostel-word-boundary-string=         | (see docstring)   | Characters that terminate words for double-click selection and word motion (mirrors Ghostty's =selection-word-chars=).  Overridden for printable ASCII by =evil-ghostel-word-boundaries= while =evil-ghostel-mode= is on. |
 | =ghostel-scroll-on-input=              | =t=                 | Jump to the bottom when typing while scrolled into scrollback.                                                                                                                                                      |
 | =ghostel-bold-color=                   | =nil=               | How bold text is colored: =nil=, =bright=, or a =#RRGGBB= string.                                                                                                                                                         |
@@ -1550,6 +1551,9 @@ When =evil-ghostel-mode= is active:
 - Normal-mode navigation (=h=, =j=, =k=, =l=, =w=, =b=, =e=, =0=, =$=, ...) works as expected.
 - *Insert/append* (=i=, =a=, =I=, =A=) sync the terminal cursor to point before entering
   insert state.
+- In normal state, prompt jumps (=[[=, =]]=), search, and minibuffer jumps
+  stay in semi-char mode.  Entering insert state from copy or Emacs mode
+  returns to the terminal.
 - *Delete* (=d=, =dw=, =dd=, =D=, =x=, =X=) yanks text to the kill ring and deletes via the
   shell.
 - *Change* (=c=, =cw=, =cc=, =C=, =s=, =S=) deletes then enters insert state.
