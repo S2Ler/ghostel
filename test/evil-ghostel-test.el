@@ -1791,8 +1791,22 @@ The cursor is at column 2; `sent' collects the keys sent to the terminal."
     (evil-emacs-state)
     (should (eq ghostel--input-mode 'copy))))
 
+(ert-deftest evil-ghostel-test-readonly-entry-leaves-insert-state ()
+  "Entering a read-only mode from insert state lands in normal state."
+  (dolist (enter '(ghostel-copy-mode ghostel-emacs-mode))
+    (evil-ghostel-test--with-readonly-fixture
+      (evil-insert-state)
+      (funcall enter)
+      (should (memq ghostel--input-mode '(copy emacs)))
+      (should (evil-normal-state-p))
+      (should (eq (key-binding "j") #'evil-ghostel-next-line))))
+  (evil-ghostel-test--with-readonly-fixture
+    (evil-emacs-state)
+    (ghostel-copy-mode)
+    (should (evil-emacs-state-p))))
+
 (ert-deftest evil-ghostel-test-prompt-navigation-stays-semi-char ()
-  "Prompt jumps keep semi-char in normal state and enter copy mode in insert."
+  "Prompt jumps keep semi-char in normal state; from insert, enter copy mode."
   (evil-ghostel-test--with-readonly-fixture
     (let ((inhibit-read-only t)
           (inhibit-modification-hooks t))
@@ -1804,7 +1818,8 @@ The cursor is at column 2; `sent' collects the keys sent to the terminal."
     (should (eq ghostel--input-mode 'semi-char))
     (evil-insert-state)
     (ghostel-next-prompt)
-    (should (eq ghostel--input-mode 'copy))))
+    (should (eq ghostel--input-mode 'copy))
+    (should (evil-normal-state-p))))
 
 (ert-deftest evil-ghostel-test-insert-line-jumps-to-input-start-in-line-mode ()
   "I in line mode lands at `ghostel--line-input-start' and sends no PTY C-a."

@@ -976,6 +976,17 @@ scrollback."
               (should sent))))
       (kill-buffer buf))))
 
+(ert-deftest ghostel-test-readonly-enter-hook ()
+  "`ghostel-readonly-enter-hook' runs after the read-only mode is set."
+  (with-temp-buffer
+    (ghostel-mode)
+    (let (seen)
+      (add-hook 'ghostel-readonly-enter-hook
+                (lambda () (push ghostel--input-mode seen)) nil t)
+      (ghostel-copy-mode)
+      (ghostel-emacs-mode)
+      (should (equal seen '(emacs copy))))))
+
 (ert-deftest ghostel-test-copy-to-emacs-transition ()
   "Copy → Emacs unfreezes the terminal."
   (let ((buf (generate-new-buffer " *ghostel-test-copy-to-emacs*")))

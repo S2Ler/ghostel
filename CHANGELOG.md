@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 - `ghostel-prompt-navigation-input-mode` accepts nil to keep prompt
   navigation in the current input mode.
+- `ghostel-readonly-enter-hook`, run after entering copy or Emacs mode.
 
 ### Changed
 - Exiting copy or Emacs mode always leaves read-only mode, even after
@@ -20,6 +21,9 @@ All notable changes to this project will be documented in this file.
   `]]`), search, and minibuffer jumps stay in semi-char mode, so `j`, `G`,
   `i`, and `a` keep driving the shell afterwards.
   Fixes [#715](https://github.com/dakra/ghostel/issues/715).
+- evil-ghostel: entering copy or Emacs mode from insert state (`C-c C-t`,
+  prompt jumps, mouse selection) switches to normal state, so `j`, `k`,
+  and other motions browse the buffer instead of exiting to the terminal.
 
 ## [0.56.0] — 2026-09-19
 

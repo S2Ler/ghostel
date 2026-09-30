@@ -1,0 +1,152 @@
+{
+  "name": "word-boundaries-ghostel",
+  "comment": "Double-click word selection under evil-ghostel's Vim-style syntax table: the documented mouse tradeoff on rendered output (a component with the mode on, the whole path with it off). The click targets a fixed line/column, so typing waits for the shell prompt (typeahead before the first prompt is echoed by the tty and shifts the layout) and the layout is asserted before clicking. Each click starts in insert state, where it goes through ghostel's own mouse-1 binding rather than evil's; with evil-ghostel on, the resulting copy mode lands in normal state and the selection becomes a visual selection. M-w and y must copy exactly the selected text.",
+  "session": {
+    "ui": "tty",
+    "size": "100x30",
+    "config": "minimal",
+    "eval": [
+      "(load \"/Users/daniel/.emacs.d/lib/ghostel/test/elate/lib/evil-ghostel-setup.el\")",
+      "(setq ghostel-shell \"/opt/homebrew/bin/bash\")"
+    ]
+  },
+  "steps": [
+    {
+      "eval": "(ghostel)"
+    },
+    {
+      "wait": "until",
+      "pred": "(save-excursion (goto-char (point-max)) (skip-chars-backward \" \\n\") (eq (char-before) ?$))",
+      "timeout": 15.0
+    },
+    {
+      "group": "prompt",
+      "comment": "short prompt so the output lands on a known line"
+    },
+    {
+      "type": "PS1='> '"
+    },
+    {
+      "keys": "RET"
+    },
+    {
+      "wait": "until",
+      "pred": "(save-excursion (goto-char (point-max)) (skip-chars-backward \" \\n\") (eq (char-before) ?>))",
+      "timeout": 15.0
+    },
+    {
+      "group": "output",
+      "comment": "render the path on line 3, column 6..8 = BAD"
+    },
+    {
+      "type": "echo dbl a/BAD/c.txt"
+    },
+    {
+      "keys": "RET"
+    },
+    {
+      "wait": "until",
+      "pred": "(save-excursion (goto-char (point-max)) (skip-chars-backward \" \\n\") (eq (char-before) ?>))",
+      "timeout": 15.0
+    },
+    {
+      "eval": "(save-excursion (goto-char (point-min)) (unless (and (re-search-forward \"^dbl a/BAD/c.txt$\" nil t) (= (line-number-at-pos) 3)) (error \"LAYOUT: output not on line 3\")))"
+    },
+    {
+      "group": "on",
+      "comment": "mode on: double-click selects the component"
+    },
+    {
+      "assert": {
+        "eval": "(and evil-ghostel-mode (eq (syntax-table) evil-ghostel-syntax-table))"
+      }
+    },
+    {
+      "eval": "(progn (deactivate-mark) (when (memq ghostel--input-mode '(copy emacs)) (ghostel-readonly-exit)) (evil-insert-state))"
+    },
+    {
+      "mouse": "double",
+      "line": 3,
+      "col": 7
+    },
+    {
+      "assert": {
+        "eval": "(and (evil-visual-state-p) (equal (buffer-substring-no-properties evil-visual-beginning evil-visual-end) \"BAD\"))"
+      }
+    },
+    {
+      "keys": "M-w"
+    },
+    {
+      "assert": {
+        "eval": "(equal (car kill-ring) \"BAD\")"
+      }
+    },
+    {
+      "group": "off",
+      "comment": "mode off: ghostel's table is back, double-click selects the whole path"
+    },
+    {
+      "eval": "(evil-ghostel-mode -1)"
+    },
+    {
+      "assert": {
+        "eval": "(eq (syntax-table) ghostel-mode-syntax-table)"
+      }
+    },
+    {
+      "eval": "(progn (deactivate-mark) (when (memq ghostel--input-mode '(copy emacs)) (ghostel-readonly-exit)) (evil-insert-state))"
+    },
+    {
+      "mouse": "double",
+      "line": 3,
+      "col": 7
+    },
+    {
+      "assert": {
+        "eval": "(equal (if (evil-visual-state-p) (buffer-substring-no-properties evil-visual-beginning evil-visual-end) (and (use-region-p) (buffer-substring-no-properties (region-beginning) (region-end)))) \"a/BAD/c.txt\")"
+      }
+    },
+    {
+      "keys": "M-w"
+    },
+    {
+      "assert": {
+        "eval": "(equal (car kill-ring) \"a/BAD/c.txt\")"
+      }
+    },
+    {
+      "group": "re-enable",
+      "comment": "mode back on: evil table reinstalled, component selection again"
+    },
+    {
+      "eval": "(evil-ghostel-mode 1)"
+    },
+    {
+      "assert": {
+        "eval": "(eq (syntax-table) evil-ghostel-syntax-table)"
+      }
+    },
+    {
+      "eval": "(progn (deactivate-mark) (when (memq ghostel--input-mode '(copy emacs)) (ghostel-readonly-exit)) (evil-insert-state))"
+    },
+    {
+      "mouse": "double",
+      "line": 3,
+      "col": 7
+    },
+    {
+      "assert": {
+        "eval": "(and (evil-visual-state-p) (equal (buffer-substring-no-properties evil-visual-beginning evil-visual-end) \"BAD\"))"
+      }
+    },
+    {
+      "keys": "y"
+    },
+    {
+      "assert": {
+        "eval": "(equal (car kill-ring) \"BAD\")"
+      }
+    }
+  ]
+}

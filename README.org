@@ -1436,6 +1436,7 @@ tables below group them by area; defaults shown are the out-of-the-box values.
 | =ghostel-immediate-redraw-interval= | =0.05=    | Max seconds since last keystroke for immediate redraw.                                                                                                                   |
 | =ghostel-inhibit-redraw-functions=  | =nil=     | Abnormal hook (each fn called with the buffer); if any returns non-nil the redraw is deferred.  Used by add-ons such as =ghostel-ime=.                                     |
 | =ghostel-inhibit-anchor-functions=  | =nil=     | Abnormal hook (each fn called with WINDOW and FORCE); non-nil skips anchoring that window.  Used by add-ons such as =evil-ghostel=.                                        |
+| =ghostel-readonly-enter-hook=       | =nil=     | Hook run after entering copy or Emacs mode.  Used by add-ons such as =evil-ghostel=.                                                                                     |
 | =ghostel-cell-pixel-scale=          | =auto=    | Physical:logical pixel ratio for cell-size reporting (=auto= derives from DPI).                                                                                            |
 | =ghostel-glyph-scale-floor=         | =0.0=     | Minimum scale for glyphs that don't fit the cell (=0.0= preserves grid alignment; =1.0= renders CJK at natural size).                                                        |
 | =ghostel-line-spacing=              | =0=       | Extra vertical space below each row (int = pixels, float = fraction of line height).  Non-zero leaves gaps in box-drawing and block glyphs and between kitty image rows. |
@@ -1553,7 +1554,8 @@ When =evil-ghostel-mode= is active:
   insert state.
 - In normal state, prompt jumps (=[[=, =]]=), search, and minibuffer jumps
   stay in semi-char mode.  Entering insert state from copy or Emacs mode
-  returns to the terminal.
+  returns to the terminal; entering copy or Emacs mode from insert state
+  switches to normal state.
 - *Delete* (=d=, =dw=, =dd=, =D=, =x=, =X=) yanks text to the kill ring and deletes via the
   shell.
 - *Change* (=c=, =cw=, =cc=, =C=, =s=, =S=) deletes then enters insert state.

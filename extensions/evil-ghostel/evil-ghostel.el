@@ -298,6 +298,11 @@ Insert entry first leaves copy or Emacs mode."
             (evil-ghostel-goto-input-position (point))
           (evil-ghostel--reset-cursor-point))))))
 
+(defun evil-ghostel--readonly-enter ()
+  "Leave insert state so motion keys browse the read-only buffer."
+  (when (evil-insert-state-p)
+    (evil-normal-state)))
+
 (defconst evil-ghostel--switch-hooks
   '(evil-normal-state-entry-hook
     evil-motion-state-entry-hook
@@ -1038,6 +1043,8 @@ Enabling installs global advice while any buffer has the mode enabled."
         ;; the live cursor without the per-redraw anchor snapping it back.
         (add-hook 'ghostel-inhibit-anchor-functions
                   #'evil-ghostel--anchor-inhibit nil t)
+        (add-hook 'ghostel-readonly-enter-hook
+                  #'evil-ghostel--readonly-enter nil t)
         (advice-add 'ghostel--redraw :around #'evil-ghostel--around-redraw)
         (advice-add 'ghostel--apply-cursor-style :around
                     #'evil-ghostel--override-cursor-style)
@@ -1048,6 +1055,8 @@ Enabling installs global advice while any buffer has the mode enabled."
                  #'evil-ghostel--insert-state-entry t)
     (remove-hook 'ghostel-inhibit-anchor-functions
                  #'evil-ghostel--anchor-inhibit t)
+    (remove-hook 'ghostel-readonly-enter-hook
+                 #'evil-ghostel--readonly-enter t)
     (dolist (hook evil-ghostel--switch-hooks)
       (remove-hook hook #'evil-ghostel--sync-readonly-switches t))
     (kill-local-variable 'ghostel-mark-activation-input-mode)
