@@ -926,7 +926,7 @@ scrollback."
       (kill-buffer buf))))
 
 (ert-deftest ghostel-test-copy-mode-restores-previous-mode ()
-  "Exiting copy mode returns to whatever mode the user was in beforehand."
+  "Exiting copy mode returns to the last mode that was not read-only."
   (let ((buf (generate-new-buffer " *ghostel-test-copy-restore*")))
     (unwind-protect
         (with-current-buffer buf
@@ -947,12 +947,33 @@ scrollback."
               (should (eq ghostel--input-mode 'copy))
               (ghostel-readonly-exit)
               (should (eq ghostel--input-mode 'char))
-              ;; emacs → copy → emacs
+              ;; char → emacs → copy → char
               (ghostel-emacs-mode)
               (ghostel-copy-mode)
               (should (eq ghostel--input-mode 'copy))
               (ghostel-readonly-exit)
-              (should (eq ghostel--input-mode 'emacs)))))
+              (should (eq ghostel--input-mode 'char)))))
+      (kill-buffer buf))))
+
+(ert-deftest ghostel-test-readonly-fast-exit-sends-after-mode-switch ()
+  "A key typed in copy mode entered from Emacs mode reaches the terminal."
+  (let ((buf (generate-new-buffer " *ghostel-test-fast-exit-switch*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (ghostel-mode)
+          (let ((ghostel--term 'fake)
+                (ghostel-detect-password-prompts nil)
+                (ghostel--redraw-timer nil)
+                (sent nil))
+            (cl-letf (((symbol-function 'ghostel--invalidate) #'ignore)
+                      ((symbol-function 'ghostel--anchor-window) #'ignore)
+                      ((symbol-function 'ghostel--self-insert)
+                       (lambda () (setq sent t))))
+              (ghostel-emacs-mode)
+              (ghostel-copy-mode)
+              (ghostel-readonly-exit-and-send)
+              (should (eq ghostel--input-mode 'semi-char))
+              (should sent))))
       (kill-buffer buf))))
 
 (ert-deftest ghostel-test-copy-to-emacs-transition ()

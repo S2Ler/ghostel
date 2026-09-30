@@ -30,6 +30,8 @@ the parallel bash/zsh/fish/python3 sessions from the evil-ghostel rewrite
   (#228 / #454); see the point-tracking section below.
 - `matrix/word-boundaries-ghostel.json` — double-click selection under evil-ghostel's
   Vim-style syntax table, on bash; see the word-boundary section below.
+- `matrix/readonly-evil-ghostel.json` / `matrix/readonly-ghostel.json` — copy and Emacs
+  mode entry and exit, with and without evil; see the read-only section below.
 
 ## Running (elate 0.11.0+)
 
@@ -158,6 +160,29 @@ selects `BAD` again.
 
 ```sh
 elate run --keep-going --format json test/elate/matrix/word-boundaries-ghostel.json
+```
+
+## Read-only mode suites (copy / Emacs mode, with and without evil)
+
+`matrix/readonly-evil-ghostel.json` and `matrix/readonly-ghostel.json` drive copy and
+Emacs mode on zsh, with the shell's output as the oracle.  Every group starts from
+semi-char (and insert state under evil), so one failure does not cascade.
+
+- **evil** -- `prompt-nav` (`[[` stays semi-char, `G a` types at the prompt; #715),
+  `copy-insert` (`i` off the cursor row lands on the cursor), `nested-insert`
+  (Emacs -> copy -> `i` leaves read-only mode), `column-keep` (`b i X` in copy mode
+  edits at point), `clamp` (`0 i` from copy mode stops at the input start),
+  `emacs-state` (`C-z` keeps copy mode), `search` (normal-state `/` stays semi-char),
+  `insert-isearch` (insert-state isearch enters copy mode, typing fast-exits),
+  `freeze-then-insert` (output during the freeze moves the cursor rows down).
+- **plain** -- `fast-exit`, `nested-fast-exit` (a key typed in copy mode entered from
+  Emacs mode is sent), `nested-q` (`q` leaves read-only mode entirely), `prompt-nav`
+  (`C-c M-p`), `isearch`, `RET` (off a link: exit and run), `freeze` (held output
+  renders on exit).
+
+```sh
+elate run --keep-going --format json test/elate/matrix/readonly-evil-ghostel.json
+elate run --keep-going --format json test/elate/matrix/readonly-ghostel.json
 ```
 
 ## Kitty graphics and scrollback suites (plain ghostel, no evil)

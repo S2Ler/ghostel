@@ -612,8 +612,7 @@ default value."
 
 (defcustom ghostel-readonly-fast-exit t
   "When non-nil, copy and Emacs modes exit on `q', `C-g', or any self-insert key.
-The triggering character is forwarded to the terminal when exiting
-returns to a mode that accepts terminal input (semi-char or char).
+The triggering character is forwarded to the terminal.
 
 When nil, exit only via an explicit input-mode switch
 \(`ghostel-semi-char-mode', `ghostel-char-mode', etc.).  Standard
@@ -733,8 +732,9 @@ Applies to `ghostel-next-prompt', `ghostel-previous-prompt', and imenu
 jumps to a prompt.  `default' follows `ghostel-readonly-default-mode';
 `copy' freezes the terminal while you browse, `emacs' keeps output streaming."
   :type '(choice (const :tag "Follow ghostel-readonly-default-mode" default)
-                 (const :tag "Copy mode"  copy)
-                 (const :tag "Emacs mode" emacs)))
+                 (const :tag "Copy mode"     copy)
+                 (const :tag "Emacs mode"    emacs)
+                 (const :tag "Do not switch" nil)))
 
 (defcustom ghostel-word-boundary-string " \t\"'`|:;,()[]{}<>$│"
   "Characters that terminate words in ghostel buffers.
@@ -2802,10 +2802,8 @@ Even keys listed in `ghostel-keymap-exceptions' (\\`C-c', \\`C-x',
 
 (defvar-local ghostel--pre-readonly-mode nil
   "Input mode to restore when exiting a read-only mode.
-Set on every entry to copy or Emacs mode and cleared on exit.
-Tracks the mode the user was in immediately before the most
-recent read-only entry, so Emacs → copy → exit returns to Emacs
-mode and copy → Emacs → exit returns to copy.")
+Set on entry to copy or Emacs mode from a non-read-only mode and
+cleared on exit, so switching between the two keeps it.")
 
 (defvar-local ghostel--readonly-exit-function nil
   "When non-nil, `ghostel-readonly-exit' calls this instead of the default restore.
@@ -2842,13 +2840,12 @@ a non-read-only mode."
   ;; Manual mode switch — see `ghostel-semi-char-mode' for why.
   (setq ghostel--line-mode-paused nil)
   (let ((from ghostel--input-mode))
-    ;; Track the mode we just left so a later exit returns to it.
+    ;; Track the last non-read-only mode so a later exit returns to it.
     ;; Line mode is stateful and not safely resumable — fall back
     ;; to semi-char when exiting copy or Emacs in that case.
-    (setq ghostel--pre-readonly-mode
-          (pcase from
-            ('line 'semi-char)
-            (m m)))
+    (unless (memq from '(copy emacs))
+      (setq ghostel--pre-readonly-mode
+            (if (eq from 'line) 'semi-char from)))
     (cond
      ;; Toggle between the two read-only modes — buffer is already
      ;; read-only, just adjust the freeze state, mode-line, and keymap.
@@ -2883,7 +2880,7 @@ The buffer is read-only, so standard Emacs commands like `isearch', `occur',
 materialised scrollback.  While point sits on the live terminal cursor the
 window follows new output.
 Moving point off the cursor stops scrolling until point returns to the cursor.
-When already in Emacs mode this exits back to the previous mode."
+When already in Emacs mode this exits read-only mode."
   (interactive)
   (ghostel--ensure-ghostel-buffer)
   (if (eq ghostel--input-mode 'emacs)
@@ -2899,7 +2896,7 @@ Freezes the terminal (live output is paused) and makes the buffer
 read-only.  Standard Emacs navigation, search, and marking work
 across the full scrollback.  When `ghostel-readonly-fast-exit' is
 non-nil press \\`q' or \\[ghostel-readonly-exit] to exit; exiting
-returns to whichever input mode was active before."
+returns to the input mode active before entering read-only mode."
   (interactive)
   (ghostel--ensure-ghostel-buffer)
   (if (eq ghostel--input-mode 'copy)
@@ -2958,9 +2955,8 @@ Add it to other jump commands as a hook or `:after' advice (see the README)."
         (goto-char (point-max))
         (setq ghostel--force-next-redraw t)
         (pcase target
-          ('char  (ghostel-char-mode))
-          ('emacs (ghostel-emacs-mode))
-          (_      (ghostel-semi-char-mode)))
+          ('char (ghostel-char-mode))
+          (_     (ghostel-semi-char-mode)))
         (ghostel--adjust-size (selected-window) t)
         (ghostel--anchor-window nil t)
         (ghostel-force-redraw)))
@@ -2973,15 +2969,11 @@ Add it to other jump commands as a hook or `:after' advice (see the README)."
   (ghostel-clear-scrollback))
 
 (defun ghostel-readonly-exit-and-send ()
-  "Exit read-only mode and send the triggering key to the terminal.
-Only forwards the key when the mode we are returning to actually
-accepts terminal input (semi-char or char)."
+  "Exit read-only mode and send the triggering key to the terminal."
   (interactive)
-  (let ((target (or ghostel--pre-readonly-mode 'semi-char))
-        (custom-exit ghostel--readonly-exit-function))
+  (let ((custom-exit ghostel--readonly-exit-function))
     (ghostel-readonly-exit)
-    (when (and ghostel--term (not custom-exit)
-               (memq target '(semi-char char)))
+    (when (and ghostel--term (not custom-exit))
       (ghostel--self-insert))))
 
 (defun ghostel-readonly-RET-or-exit-and-send ()
@@ -2998,11 +2990,9 @@ press anywhere else exits and forwards a CR to the terminal."
       (progn
         (ghostel-readonly-exit)
         (ghostel--open-link url))
-    (let ((target (or ghostel--pre-readonly-mode 'semi-char))
-          (custom-exit ghostel--readonly-exit-function))
+    (let ((custom-exit ghostel--readonly-exit-function))
       (ghostel-readonly-exit)
-      (when (and ghostel--term (not custom-exit)
-                 (memq target '(semi-char char)))
+      (when (and ghostel--term (not custom-exit))
         (ghostel--send-encoded "return" "")))))
 
 (defun ghostel-readonly-end-of-buffer ()
@@ -3096,6 +3086,22 @@ Returns nil when the regexp is nil or doesn't match."
           (let ((end (match-end 0)))
             (and (<= end eol) end)))))))
 
+(defun ghostel--cursor-row-input-start ()
+  "Return the input start after a detected prompt on the cursor row, or nil.
+The prompt ends at the rightmost OSC 133 `ghostel-prompt' char before the
+cursor; without one, `ghostel-prompt-regexp' is consulted."
+  (when-let* ((cursor-pos ghostel--cursor-char-pos))
+    (let ((row-start (save-excursion
+                       (goto-char cursor-pos)
+                       (line-beginning-position)))
+          (pos cursor-pos))
+      (while (and (> pos row-start)
+                  (not (get-text-property (1- pos) 'ghostel-prompt)))
+        (setq pos (1- pos)))
+      (if (> pos row-start)
+          pos
+        (ghostel--regex-prompt-end cursor-pos)))))
+
 (defun ghostel-input-start-point ()
   "Return the buffer position where the current input begins.
 The cursor's buffer position is the source of truth — whatever the
@@ -3113,26 +3119,7 @@ when nothing can locate a position (no cursor and no detection)."
   (let ((cursor-pos ghostel--cursor-char-pos))
     (cond
      (cursor-pos
-      (let* ((row-start (save-excursion
-                          (goto-char cursor-pos)
-                          (line-beginning-position)))
-             (pos cursor-pos))
-        ;; Walk back from the cursor on its row, looking for the
-        ;; rightmost `ghostel-prompt' character.  The first prompt
-        ;; char we hit (scanning right-to-left) is the end of the
-        ;; prompt prefix - so its position+1, which is the current
-        ;; `pos' when we stop, is the input boundary.
-        (while (and (> pos row-start)
-                    (not (get-text-property (1- pos) 'ghostel-prompt)))
-          (setq pos (1- pos)))
-        (cond
-         ((and (> pos row-start)
-               (get-text-property (1- pos) 'ghostel-prompt))
-          pos)
-         ;; No OSC 133 prop - try the regex fallback.
-         ((ghostel--regex-prompt-end cursor-pos))
-         ;; Neither prop nor regex - the cursor itself is the boundary
-         (t cursor-pos))))
+      (or (ghostel--cursor-row-input-start) cursor-pos))
      (t
       ;; No live terminal - fall back to the OSC 133 walk-back so the helper
       ;; stays useful in unit tests that exercise prompt markers in isolation.

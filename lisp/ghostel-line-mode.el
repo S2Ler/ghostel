@@ -19,6 +19,7 @@
 (require 'compat)
 
 (declare-function ghostel--cursor-blink-stop "ghostel")
+(declare-function ghostel--cursor-row-input-start "ghostel")
 (declare-function ghostel--ensure-ghostel-buffer "ghostel")
 (declare-function ghostel--invalidate "ghostel")
 (declare-function ghostel--leave-readonly-state "ghostel")
@@ -27,7 +28,6 @@
 (declare-function ghostel--open-link "ghostel")
 (declare-function ghostel--redraw "ghostel-module"
                   (term &optional full force-sync))
-(declare-function ghostel--regex-prompt-end "ghostel")
 (declare-function ghostel--schedule-link-detection "ghostel")
 (declare-function ghostel--sync-read-only "ghostel")
 (declare-function ghostel--send-encoded "ghostel")
@@ -683,22 +683,6 @@ screen.  Also drives the deferred startup entry when
     (ghostel--line-mode-try-resume))
   (ghostel--line-mode-maybe-enter-initial))
 
-(defun ghostel--line-mode-startup-prompt-ready-p ()
-  "Non-nil when the cursor row shows a real prompt (OSC 133 prop or regex).
-Gates the deferred startup entry so line mode skips a blank pre-prompt screen.
-Unlike `ghostel-input-start-point', the bare cursor does not count as a prompt."
-  (when-let* ((cursor-pos ghostel--cursor-char-pos))
-    (save-excursion
-      (goto-char cursor-pos)
-      (let ((row-start (line-beginning-position))
-            (pos cursor-pos))
-        (while (and (> pos row-start)
-                    (not (get-text-property (1- pos) 'ghostel-prompt)))
-          (setq pos (1- pos)))
-        (or (and (> pos row-start)
-                 (get-text-property (1- pos) 'ghostel-prompt))
-            (ghostel--regex-prompt-end cursor-pos))))))
-
 (defun ghostel--line-mode-maybe-enter-initial ()
   "Enter line mode once the first prompt renders, if armed at startup.
 Armed by `ghostel-initial-input-mode' = `line'.  Runs each redraw cycle until a
@@ -708,7 +692,7 @@ wins: a non-semi-char buffer drops the flag without entering."
     (cond
      ((not (eq ghostel--input-mode 'semi-char))
       (setq ghostel--pending-initial-line-mode nil))
-     ((ghostel--line-mode-startup-prompt-ready-p)
+     ((ghostel--cursor-row-input-start)
       (setq ghostel--pending-initial-line-mode nil)
       (ghostel-line-mode)))))
 

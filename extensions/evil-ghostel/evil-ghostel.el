@@ -275,15 +275,45 @@ ORIG-FN is the advised setter (STYLE, VISIBLE); deferred to in alt-screen."
 
 (defun evil-ghostel--insert-state-entry ()
   "Drive the terminal cursor to point on insert/emacs entry (safety net).
-On a different row, snap point back to the cursor instead — up/down arrows
-would be read as shell history navigation."
-  (when (and (derived-mode-p 'ghostel-mode)
-             (evil-ghostel--prompt-active-p))
-    (let ((trow (cdr ghostel--cursor-pos))
-          (erow (or (evil-ghostel--point-viewport-row) 0)))
-      (if (= erow trow)
-          (evil-ghostel-goto-input-position (point))
-        (evil-ghostel--reset-cursor-point)))))
+On a different row, snap point back to the cursor instead,
+up/down arrows would be read as shell history navigation.
+Insert entry first leaves copy or Emacs mode."
+  (when (derived-mode-p 'ghostel-mode)
+    (evil-ghostel--sync-readonly-switches)
+    (when (and (eq evil-state 'insert)
+               (memq ghostel--input-mode '(copy emacs)))
+      ;; The exit moves point to the live cursor; keep a column on its row,
+      ;; but not inside a detected prompt.
+      (let ((col (and (ghostel-point-on-cursor-row-p) (current-column))))
+        (ghostel-readonly-exit)
+        (evil-ghostel--reset-cursor-point)
+        (when col
+          (move-to-column col)
+          (when-let* ((start (ghostel--cursor-row-input-start)))
+            (goto-char (max (point) start))))))
+    (when (evil-ghostel--prompt-active-p)
+      (let ((trow (cdr ghostel--cursor-pos))
+            (erow (or (evil-ghostel--point-viewport-row) 0)))
+        (if (= erow trow)
+            (evil-ghostel-goto-input-position (point))
+          (evil-ghostel--reset-cursor-point))))))
+
+(defconst evil-ghostel--switch-hooks
+  '(evil-normal-state-entry-hook
+    evil-motion-state-entry-hook
+    evil-local-mode-hook)
+  "Hooks running `evil-ghostel--sync-readonly-switches'.
+Entering insert or Emacs state runs it from `evil-ghostel--insert-state-entry'.")
+
+(defun evil-ghostel--sync-readonly-switches ()
+  "Keep prompt jumps and search landings in semi-char in normal/motion state.
+These states browse the buffer themselves, and the terminal-aware
+j / G / i / a act only in semi-char."
+  (if (memq evil-state '(normal motion))
+      (setq-local ghostel-prompt-navigation-input-mode nil
+                  ghostel-point-leave-input-mode nil)
+    (kill-local-variable 'ghostel-prompt-navigation-input-mode)
+    (kill-local-variable 'ghostel-point-leave-input-mode)))
 
 (defun evil-ghostel--escape-stay ()
   "Disable `evil-move-cursor-back': moving back on ESC desyncs point."
@@ -992,6 +1022,11 @@ Enabling installs global advice while any buffer has the mode enabled."
         ;; Mouse selection stays governed by `ghostel-mouse-drag-input-mode',
         ;; so it still picks its own mode.
         (setq-local ghostel-mark-activation-input-mode nil)
+        ;; Visual and operator states keep the values of the state they
+        ;; were entered from.
+        (dolist (hook evil-ghostel--switch-hooks)
+          (add-hook hook #'evil-ghostel--sync-readonly-switches nil t))
+        (evil-ghostel--sync-readonly-switches)
         (evil-ghostel--install-word-boundaries)
         (add-hook 'evil-insert-state-entry-hook
                   #'evil-ghostel--insert-state-entry nil t)
@@ -1013,7 +1048,11 @@ Enabling installs global advice while any buffer has the mode enabled."
                  #'evil-ghostel--insert-state-entry t)
     (remove-hook 'ghostel-inhibit-anchor-functions
                  #'evil-ghostel--anchor-inhibit t)
+    (dolist (hook evil-ghostel--switch-hooks)
+      (remove-hook hook #'evil-ghostel--sync-readonly-switches t))
     (kill-local-variable 'ghostel-mark-activation-input-mode)
+    (kill-local-variable 'ghostel-prompt-navigation-input-mode)
+    (kill-local-variable 'ghostel-point-leave-input-mode)
     (evil-ghostel--restore-word-boundaries)
     (kill-local-variable 'evil-ghostel--saved-syntax-table)
     (unless (evil-ghostel--any-active-elsewhere-p (current-buffer))

@@ -167,11 +167,32 @@ buffer-locally so that chain yields to evil's own selection model."
          (should copied))))))
 
 (ert-deftest evil-ghostel-test-disable-restores-mark-activation ()
-  "Disabling `evil-ghostel-mode' restores ghostel's mark-activation behavior."
+  "Disabling `evil-ghostel-mode' restores ghostel's read-only mode switches."
   (evil-ghostel-test--with-evil-buffer
-   (should (local-variable-p 'ghostel-mark-activation-input-mode))
-   (evil-ghostel-mode -1)
-   (should-not (local-variable-p 'ghostel-mark-activation-input-mode))))
+   (evil-normal-state)
+   (let ((vars '(ghostel-mark-activation-input-mode
+                 ghostel-prompt-navigation-input-mode
+                 ghostel-point-leave-input-mode)))
+     (dolist (var vars)
+       (should (local-variable-p var))
+       (should-not (symbol-value var)))
+     (evil-ghostel-mode -1)
+     (dolist (var vars)
+       (should-not (local-variable-p var))))))
+
+(ert-deftest evil-ghostel-test-readonly-switches-follow-state ()
+  "Only normal state keeps prompt jumps and search landings in semi-char."
+  (evil-ghostel-test--with-evil-buffer
+   (dolist (state '(insert emacs normal visual insert motion))
+     (evil-change-state state)
+     (let ((browsing (and (memq state '(normal visual motion)) t)))
+       (should (eq browsing (local-variable-p
+                             'ghostel-prompt-navigation-input-mode)))
+       (should (eq browsing (local-variable-p
+                             'ghostel-point-leave-input-mode)))))
+   (evil-normal-state)
+   (evil-local-mode -1)
+   (should-not (local-variable-p 'ghostel-point-leave-input-mode))))
 
 (ert-deftest evil-ghostel-test-advice-survives-disable-in-other-buffer ()
   "Global `ghostel--redraw' / cursor-style advice survives one buffer disabling.
@@ -1675,21 +1696,115 @@ Point and the terminal cursor are intentionally decoupled there."
           (evil-insert-state))
         (should-not sync-called)))))
 
-(ert-deftest evil-ghostel-test-insert-entry-skips-sync-in-copy-mode ()
-  "Insert-state entry hook does not sync the cursor in copy mode."
-  (evil-ghostel-test--with-evil-buffer
-   (setq-local ghostel--term t)
-   (setq-local ghostel--input-mode 'copy)
-   (cl-letf (((symbol-function 'ghostel--alt-screen-p) (lambda (&rest _) nil))
-             (ghostel--cursor-pos '(0 . 0)))
-     (evil-normal-state)
-     (let ((sync-called nil))
-       (cl-letf (((symbol-function 'evil-ghostel-goto-input-position)
-                  (lambda (&rest _) (setq sync-called t)))
-                 ((symbol-function 'evil-ghostel--reset-cursor-point)
-                  (lambda () (setq sync-called t))))
-         (evil-insert-state))
-       (should-not sync-called)))))
+(defmacro evil-ghostel-test--with-readonly-fixture (&rest body)
+  "Run BODY in normal state in a mock buffer holding \"$ echo hello\".
+The cursor is at column 2; `sent' collects the keys sent to the terminal."
+  (declare (indent 0) (debug t))
+  `(evil-ghostel-test--with-evil-buffer
+    (setq-local ghostel--term 'fake)
+    (insert "$ echo hello")
+    (let ((sent nil))
+      (cl-letf (((symbol-function 'ghostel--alt-screen-p) #'ignore)
+                ((symbol-function 'ghostel--invalidate) #'ignore)
+                ((symbol-function 'ghostel--anchor-window) #'ignore)
+                ((symbol-function 'ghostel-force-redraw) #'ignore)
+                ((symbol-function 'evil-ghostel--sync-render) #'ignore)
+                ((symbol-function 'ghostel--send-encoded)
+                 (lambda (key &rest _) (push key sent)))
+                (ghostel--cursor-pos '(2 . 0)))
+        (evil-normal-state)
+        ,@body))))
+
+(ert-deftest evil-ghostel-test-insert-entry-exits-read-only-mode ()
+  "Insert-state entry leaves every read-only mode for the pre-read-only mode."
+  (dolist (enter '((ghostel-copy-mode)
+                   (ghostel-emacs-mode)
+                   (ghostel-emacs-mode ghostel-copy-mode)))
+    (evil-ghostel-test--with-readonly-fixture
+      (mapc #'funcall enter)
+      (evil-insert-state)
+      (should (eq ghostel--input-mode 'semi-char)))))
+
+(ert-deftest evil-ghostel-test-insert-entry-from-copy-mode-keeps-column ()
+  "Insert entry from copy mode drives the cursor to point's column."
+  (evil-ghostel-test--with-readonly-fixture
+    (ghostel-copy-mode)
+    (move-to-column 7)
+    (evil-insert-state)
+    (should (eq ghostel--input-mode 'semi-char))
+    (should (equal sent (make-list 5 "right")))))
+
+(ert-deftest evil-ghostel-test-insert-entry-from-copy-mode-clamps-to-input ()
+  "A kept column inside the prompt moves to the input start."
+  (evil-ghostel-test--with-readonly-fixture
+    (setq-local ghostel--cursor-char-pos 3)
+    (ghostel-copy-mode)
+    (move-to-column 1)
+    (evil-insert-state)
+    (should (= (point) 3))
+    (should-not sent)))
+
+(ert-deftest evil-ghostel-test-insert-entry-from-copy-mode-no-prompt-keeps-column ()
+  "Without a detected prompt the kept column is not clamped to the cursor."
+  (evil-ghostel-test--with-readonly-fixture
+    (let ((inhibit-read-only t)
+          (inhibit-modification-hooks t))
+      (erase-buffer))
+    (insert "long-wrapped tail")
+    (setq-local ghostel--cursor-char-pos 18)
+    (cl-letf ((ghostel--cursor-pos '(17 . 0)))
+      (ghostel-copy-mode)
+      (move-to-column 3)
+      (evil-insert-state)
+      (should (equal sent (make-list 14 "left"))))))
+
+(ert-deftest evil-ghostel-test-insert-entry-from-copy-mode-off-row ()
+  "Off the cursor row, insert entry from copy mode lands on the cursor."
+  (evil-ghostel-test--with-readonly-fixture
+    (goto-char (point-min))
+    (insert "old output\n")
+    (cl-letf ((ghostel--cursor-pos '(2 . 1)))
+      (ghostel-copy-mode)
+      (goto-char (point-min))
+      (evil-insert-state)
+      (should (eq ghostel--input-mode 'semi-char))
+      (should (equal (cons (current-column) (1- (line-number-at-pos)))
+                     ghostel--cursor-pos))
+      (should-not sent))))
+
+(ert-deftest evil-ghostel-test-search-landing-stays-semi-char ()
+  "Point leaving the input keeps semi-char in normal state, not in insert."
+  (evil-ghostel-test--with-readonly-fixture
+    (setq-local ghostel--cursor-char-pos 3)
+    (goto-char 8)
+    (ghostel-maybe-leave-input)
+    (should (eq ghostel--input-mode 'semi-char))
+    (evil-insert-state)
+    (goto-char 8)
+    (ghostel-maybe-leave-input)
+    (should (eq ghostel--input-mode 'copy))))
+
+(ert-deftest evil-ghostel-test-emacs-state-entry-keeps-read-only-mode ()
+  "Emacs-state entry keeps copy mode and its read-only bindings."
+  (evil-ghostel-test--with-readonly-fixture
+    (ghostel-copy-mode)
+    (evil-emacs-state)
+    (should (eq ghostel--input-mode 'copy))))
+
+(ert-deftest evil-ghostel-test-prompt-navigation-stays-semi-char ()
+  "Prompt jumps keep semi-char in normal state and enter copy mode in insert."
+  (evil-ghostel-test--with-readonly-fixture
+    (let ((inhibit-read-only t)
+          (inhibit-modification-hooks t))
+      (erase-buffer))
+    (insert (propertize "$ " 'ghostel-prompt t) "ls\nfoo\n"
+            (propertize "$ " 'ghostel-prompt t))
+    (ghostel-previous-prompt)
+    (should (= (point) 3))
+    (should (eq ghostel--input-mode 'semi-char))
+    (evil-insert-state)
+    (ghostel-next-prompt)
+    (should (eq ghostel--input-mode 'copy))))
 
 (ert-deftest evil-ghostel-test-insert-line-jumps-to-input-start-in-line-mode ()
   "I in line mode lands at `ghostel--line-input-start' and sends no PTY C-a."
