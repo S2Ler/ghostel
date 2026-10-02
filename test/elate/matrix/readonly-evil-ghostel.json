@@ -1,6 +1,6 @@
 {
   "name": "readonly-evil-ghostel",
-  "comment": "Read-only input modes under evil-ghostel (#715). Normal-state prompt jumps and search landings stay in semi-char; entering insert state from copy or Emacs mode (including Emacs -> copy nesting) returns to the terminal, keeping point's column on the cursor row but not inside the prompt; emacs state keeps copy mode; insert-state isearch still enters copy mode and fast exit forwards typing; a cursor that moved rows during a copy-mode freeze is handled on insert entry. The shell's output is the oracle. Driven on zsh.",
+  "comment": "Read-only input modes under evil-ghostel (#715). Normal-state prompt jumps and search landings stay in semi-char; entering insert state from copy or Emacs mode (including Emacs -> copy nesting) returns to the terminal, keeping point's column on the cursor row but not inside the prompt; emacs state keeps copy mode; entering copy mode from insert state (C-c C-t, isearch) lands in normal state so motions browse the frozen buffer; a cursor that moved rows during a copy-mode freeze is handled on insert entry. The shell's output is the oracle. Driven on zsh.",
   "session": {
     "ui": "tty",
     "size": "100x30",
@@ -285,7 +285,7 @@
     },
     {
       "group": "insert-isearch",
-      "comment": "insert-state isearch still enters copy mode; typing fast-exits and reaches the prompt"
+      "comment": "insert-state isearch enters copy mode in normal state; k browses, i returns to the prompt"
     },
     {
       "eval": "(progn (when (memq ghostel--input-mode '(copy emacs)) (ghostel-readonly-exit)) (evil-insert-state))"
@@ -299,7 +299,16 @@
       "timeout": 5.0
     },
     {
-      "eval": "(unless (eq ghostel--input-mode 'copy) (error \"MODE %s\" ghostel--input-mode))"
+      "eval": "(unless (and (eq ghostel--input-mode 'copy) (eq evil-state 'normal)) (error \"MODE %s STATE %s\" ghostel--input-mode evil-state))"
+    },
+    {
+      "keys": "k"
+    },
+    {
+      "eval": "(unless (eq ghostel--input-mode 'copy) (error \"MODE %s STATE %s\" ghostel--input-mode evil-state))"
+    },
+    {
+      "keys": "i"
     },
     {
       "type": "echo m08ok"
@@ -310,6 +319,45 @@
     {
       "wait": "text",
       "pattern": "^m08ok$",
+      "timeout": 8.0
+    },
+    {
+      "group": "copy-from-insert",
+      "comment": "C-c C-t in insert state lands in normal state; k k stay in copy mode, C-c C-t exits, a types at the prompt"
+    },
+    {
+      "eval": "(progn (when (memq ghostel--input-mode '(copy emacs)) (ghostel-readonly-exit)) (evil-insert-state))"
+    },
+    {
+      "keys": "C-c C-t"
+    },
+    {
+      "eval": "(unless (and (eq ghostel--input-mode 'copy) (eq evil-state 'normal)) (error \"MODE %s STATE %s\" ghostel--input-mode evil-state))"
+    },
+    {
+      "keys": "k k"
+    },
+    {
+      "eval": "(unless (and (eq ghostel--input-mode 'copy) (eq evil-state 'normal)) (error \"MODE %s STATE %s\" ghostel--input-mode evil-state))"
+    },
+    {
+      "keys": "C-c C-t"
+    },
+    {
+      "eval": "(unless (eq ghostel--input-mode 'semi-char) (error \"MODE %s STATE %s\" ghostel--input-mode evil-state))"
+    },
+    {
+      "keys": "a"
+    },
+    {
+      "type": "echo m10ok"
+    },
+    {
+      "keys": "RET"
+    },
+    {
+      "wait": "text",
+      "pattern": "^m10ok$",
       "timeout": 8.0
     },
     {

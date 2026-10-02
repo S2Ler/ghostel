@@ -173,7 +173,9 @@ semi-char (and insert state under evil), so one failure does not cascade.
   (Emacs -> copy -> `i` leaves read-only mode), `column-keep` (`b i X` in copy mode
   edits at point), `clamp` (`0 i` from copy mode stops at the input start),
   `emacs-state` (`C-z` keeps copy mode), `search` (normal-state `/` stays semi-char),
-  `insert-isearch` (insert-state isearch enters copy mode, typing fast-exits),
+  `insert-isearch` (insert-state isearch enters copy mode in normal state, `k` browses),
+  `copy-from-insert` (`C-c C-t` in insert state lands in normal state, `k k` stay in
+  copy mode),
   `freeze-then-insert` (output during the freeze moves the cursor rows down).
 - **plain** -- `fast-exit`, `nested-fast-exit` (a key typed in copy mode entered from
   Emacs mode is sent), `nested-q` (`q` leaves read-only mode entirely), `prompt-nav`

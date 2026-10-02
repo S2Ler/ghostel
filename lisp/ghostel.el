@@ -340,6 +340,10 @@ motion over an animated terminal).  Honor FORCE (deliberate paste/yank
 and mode-switch anchors) by returning nil when it is set."
   :type 'hook)
 
+(defcustom ghostel-readonly-enter-hook nil
+  "Hook run after entering copy or Emacs mode."
+  :type 'hook)
+
 (defcustom ghostel-adaptive-fps t
   "Use adaptive frame rate for terminal redraw.
 When non-nil, use a shorter initial delay for responsive interactive
@@ -2870,7 +2874,8 @@ a non-read-only mode."
     (use-local-map (ghostel--readonly-keymap))
     (setq ghostel--mode-line-tag (ghostel--mode-line-tag-make mode label))
     (ghostel--mode-line-refresh)
-    (ghostel--fake-cursor-update)))
+    (ghostel--fake-cursor-update)
+    (run-hooks 'ghostel-readonly-enter-hook)))
 
 (defun ghostel-emacs-mode ()
   "Toggle Emacs mode — read-only buffer with the terminal still running.
